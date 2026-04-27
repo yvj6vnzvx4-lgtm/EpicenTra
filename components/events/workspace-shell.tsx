@@ -215,7 +215,9 @@ export function WorkspaceShell({
                 <span className="hidden sm:inline">{isLocked ? "Unlock" : "Lock Plan"}</span>
               </button>
             )}
-            <SaveIndicator status={saveStatus} />
+            <div className="hidden sm:block">
+              <SaveIndicator status={saveStatus} />
+            </div>
           </div>
         </div>
       </div>

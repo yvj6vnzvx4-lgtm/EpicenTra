@@ -301,19 +301,19 @@ export function SpecsForm({
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_310px]">
         <div className="space-y-6">
-          <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(145deg,#ffffff_0%,#f8fbff_100%)] p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)]">
-            <div className="flex flex-col gap-6">
+          <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(145deg,#ffffff_0%,#f8fbff_100%)] p-4 sm:rounded-[28px] sm:p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)]">
+            <div className="flex flex-col gap-5 sm:gap-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div className="max-w-2xl">
+                <div className="min-w-0">
                   <span className="rounded-full bg-sky-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-700">
                     Guided Planner
                   </span>
-                  <h2 className="mt-4 text-3xl font-bold tracking-tight text-slate-950">
+                  <h2 className="mt-3 text-xl font-bold tracking-tight text-slate-950 sm:text-3xl">
                     Build the event plan from brief to execution readiness
                   </h2>
                 </div>
 
-                <div className="min-w-[220px] rounded-3xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                <div className="w-full rounded-3xl border border-slate-200 bg-white px-4 py-4 shadow-sm lg:w-auto lg:min-w-[220px]">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                     Plan Completion
                   </p>
@@ -330,15 +330,15 @@ export function SpecsForm({
                 </div>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-3 grid-cols-2 xl:grid-cols-4">
                 {summaryCards.map(({ label, value, hint, icon: Icon, iconClass }) => (
-                  <div key={label} className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-                    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      <Icon className={`h-3.5 w-3.5 ${iconClass}`} />
-                      {label}
+                  <div key={label} className="rounded-2xl border border-slate-200 bg-white px-3 py-3 sm:px-4 sm:py-4 shadow-sm">
+                    <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      <Icon className={`h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0 ${iconClass}`} />
+                      <span className="truncate">{label}</span>
                     </div>
-                    <p className="mt-3 line-clamp-2 text-sm font-semibold text-slate-900">{value}</p>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p>
+                    <p className="mt-2 line-clamp-2 text-xs sm:text-sm font-semibold text-slate-900">{value}</p>
+                    <p className="mt-0.5 text-[11px] leading-4 text-slate-500 hidden sm:block">{hint}</p>
                   </div>
                 ))}
               </div>
@@ -353,7 +353,7 @@ export function SpecsForm({
                       key={stage.id}
                       type="button"
                       onClick={() => setActiveStageId(stage.id)}
-                      className={`min-w-[220px] rounded-2xl border px-4 py-3 text-left transition ${
+                      className={`min-w-[185px] rounded-2xl border px-3 py-3 text-left transition ${
                         active
                           ? "border-sky-300 bg-sky-50 shadow-sm"
                           : "border-slate-200 bg-white"
