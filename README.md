@@ -1,36 +1,140 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# EpicenTra
 
-## Getting Started
+AI-powered event management platform for experiential marketing and brand activations. Built as a Capstone project.
 
-First, run the development server:
+## Features
+
+- **Event Workspace** — specs, 3D space designer, collaborative notes, agent tasks
+- **Planning Agent** — Groq-powered AI (llama-3.3-70b) with full event context
+- **Real-time Collaboration** — Socket.io presence, typing indicators, live notes feed
+- **Plan Lock / Execution** — lock flow with execution status board
+- **Analytics** — cross-event charts, budget analysis, team activity
+- **Per-Event Reports** — printable PDF summaries
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Framework | Next.js 14 (App Router) |
+| Language | TypeScript |
+| Styling | Tailwind CSS |
+| Database | PostgreSQL (Docker) |
+| ORM | Prisma 7 with `@prisma/adapter-pg` |
+| Auth | NextAuth.js v4 (credentials + JWT) |
+| AI | Groq API via Vercel AI SDK (`llama-3.3-70b-versatile`) |
+| Real-time | Socket.io (Express server on port 3001) |
+| 3D Design | React Three Fiber v8 + Three.js |
+| Charts | Recharts |
+
+## Setup
+
+### Prerequisites
+
+- Node.js 18+
+- Docker Desktop
+
+### 1. Clone & Install
+
+```bash
+git clone <repo-url>
+cd epicentra
+npm install --legacy-peer-deps
+```
+
+### 2. Start PostgreSQL
+
+```bash
+docker-compose up -d
+```
+
+### 3. Environment Variables
+
+Create `.env` (for Prisma CLI):
+
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/epicentra
+```
+
+Create `.env.local` (for Next.js):
+
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/epicentra
+NEXTAUTH_SECRET=your-secret-here-change-in-production
+NEXTAUTH_URL=http://localhost:3000
+NEXT_PUBLIC_SOCKET_URL=http://localhost:3001
+GROQ_API_KEY=your-groq-api-key
+```
+
+Get a free Groq API key at [console.groq.com](https://console.groq.com).
+
+Generate a NextAuth secret:
+
+```bash
+openssl rand -base64 32
+```
+
+### 4. Database Setup
+
+```bash
+npx prisma migrate dev
+npx prisma db seed
+```
+
+### 5. Run
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+This starts both the Next.js app (port 3000) and the Socket.io server (port 3001) via `concurrently`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Demo Accounts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Email | Password | Role |
+|-------|----------|------|
+| sarah@acme.com | password123 | Director |
+| james@acme.com | password123 | Manager |
+| alex@acme.com | password123 | Coordinator |
 
-## Learn More
+## Architecture
 
-To learn more about Next.js, take a look at the following resources:
+```
+epicentra/
+├── app/                        # Next.js App Router
+│   ├── (auth)/login/           # Login page
+│   ├── (dashboard)/            # Protected shell
+│   │   ├── dashboard/          # Overview
+│   │   ├── events/[eventId]/   # Event workspace
+│   │   ├── analytics/          # Cross-event analytics
+│   │   └── settings/           # Profile & team management
+│   └── api/                    # API routes
+├── components/
+│   ├── layout/                 # Sidebar, Header, CommandPalette
+│   ├── events/                 # Workspace components
+│   ├── analytics/              # Charts & reports
+│   └── ui/                     # Shared UI primitives
+├── lib/
+│   ├── agent-service.ts        # Groq AI integration
+│   ├── analytics.ts            # Analytics data queries
+│   ├── auth.ts                 # NextAuth config
+│   └── prisma.ts               # Prisma client singleton
+├── server/
+│   └── index.ts                # Socket.io Express server
+└── prisma/
+    ├── schema.prisma
+    └── seed.ts
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Keyboard Shortcuts
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Shortcut | Action |
+|----------|--------|
+| `⌘K` | Open command palette / search |
+| `⌘Enter` | Send message in Notes chat |
 
-## Deploy on Vercel
+## Notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- The Socket.io server runs separately from Next.js — both must be running for real-time features
+- The AI agent requires a `GROQ_API_KEY` — without it, a graceful fallback message is shown
+- React Three Fiber is pinned to v8 due to a React 19 peer dependency conflict
+- Prisma 7 requires `@prisma/adapter-pg` — the `url` field must not be in `schema.prisma`

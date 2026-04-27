@@ -1,0 +1,1636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EpicenTra — Pitch Deck 2026</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet">
+<script>/**
+ * <deck-stage> — reusable web component for HTML decks.
+ *
+ * Handles:
+ *  (a) speaker notes — reads <script type="application/json" id="speaker-notes">
+ *      and posts {slideIndexChanged: N} to the parent window on nav.
+ *  (b) keyboard navigation — ←/→, PgUp/PgDn, Space, Home/End, number keys.
+ *  (c) press R to reset to slide 0 (with a tasteful keyboard hint).
+ *  (d) bottom-center overlay showing slide count + hints, fades out on idle.
+ *  (e) auto-scaling — inner canvas is a fixed design size (default 1920×1080)
+ *      scaled with `transform: scale()` to fit the viewport, letterboxed.
+ *      Set the `noscale` attribute to render at authored size (1:1) — the
+ *      PPTX exporter sets this so its DOM capture sees unscaled geometry.
+ *  (f) print — `@media print` lays every slide out as its own page at the
+ *      design size, so the browser's Print → Save as PDF produces a clean
+ *      one-page-per-slide PDF with no extra setup.
+ *
+ * Slides are HIDDEN, not unmounted. Non-active slides stay in the DOM with
+ * `visibility: hidden` + `opacity: 0`, so their state (videos, iframes,
+ * form inputs, React trees) is preserved across navigation.
+ *
+ * Lifecycle event — the component dispatches a `slidechange` CustomEvent on
+ * itself whenever the active slide changes (including the initial mount).
+ * The event bubbles and composes out of shadow DOM, so you can listen on
+ * the <deck-stage> element or on document:
+ *
+ *   document.querySelector('deck-stage').addEventListener('slidechange', (e) => {
+ *     e.detail.index         // new 0-based index
+ *     e.detail.previousIndex // previous index, or -1 on init
+ *     e.detail.total         // total slide count
+ *     e.detail.slide         // the new active slide element
+ *     e.detail.previousSlide // the prior slide element, or null on init
+ *     e.detail.reason        // 'init' | 'keyboard' | 'click' | 'tap' | 'api'
+ *   });
+ *
+ * Persistence: current slide index is saved to localStorage keyed by the
+ * document path, so refresh returns you to the same place.
+ *
+ * Usage:
+ *   <deck-stage width="1920" height="1080">
+ *     <section data-label="Title">...</section>
+ *     <section data-label="Agenda">...</section>
+ *   </deck-stage>
+ *
+ * Slides are the direct element children of <deck-stage>. Each slide is
+ * automatically tagged with:
+ *   - data-screen-label="NN Label"   (1-indexed, for comment flow)
+ *   - data-om-validate="no_overflowing_text,no_overlapping_text,slide_sized_text"
+ */
+
+(() => {
+  const DESIGN_W_DEFAULT = 1920;
+  const DESIGN_H_DEFAULT = 1080;
+  const STORAGE_PREFIX = 'deck-stage:slide:';
+  const OVERLAY_HIDE_MS = 1800;
+  const VALIDATE_ATTR = 'no_overflowing_text,no_overlapping_text,slide_sized_text';
+
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  const stylesheet = `
+    :host {
+      position: fixed;
+      inset: 0;
+      display: block;
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    .stage {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .canvas {
+      position: relative;
+      transform-origin: center center;
+      flex-shrink: 0;
+      background: #fff;
+      will-change: transform;
+    }
+
+    /* Slides live in light DOM (via <slot>) so authored CSS still applies.
+       We absolutely position each slotted child to stack them. */
+    ::slotted(*) {
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      box-sizing: border-box !important;
+      overflow: hidden;
+      opacity: 0;
+      pointer-events: none;
+      visibility: hidden;
+    }
+    ::slotted([data-deck-active]) {
+      opacity: 1;
+      pointer-events: auto;
+      visibility: visible;
+    }
+
+    /* Tap zones for mobile — back/forward thirds like Stories.
+       Transparent, no visible UI, don't block the overlay. */
+    .tapzones {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      z-index: 2147482000;
+      pointer-events: none;
+    }
+    .tapzone {
+      flex: 1;
+      pointer-events: auto;
+      -webkit-tap-highlight-color: transparent;
+    }
+    /* Only activate tap zones on coarse pointers (touch devices). */
+    @media (hover: hover) and (pointer: fine) {
+      .tapzones { display: none; }
+    }
+
+    .overlay {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translate(-50%, 6px) scale(0.92);
+      filter: blur(6px);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      background: #000;
+      color: #fff;
+      border-radius: 999px;
+      font-size: 12px;
+      font-feature-settings: "tnum" 1;
+      letter-spacing: 0.01em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 260ms ease, transform 260ms cubic-bezier(.2,.8,.2,1), filter 260ms ease;
+      transform-origin: center bottom;
+      z-index: 2147483000;
+      user-select: none;
+    }
+    .overlay[data-visible] {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, 0) scale(1);
+      filter: blur(0);
+    }
+
+    .btn {
+      appearance: none;
+      -webkit-appearance: none;
+      background: transparent;
+      border: 0;
+      margin: 0;
+      padding: 0;
+      color: inherit;
+      font: inherit;
+      cursor: default;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      min-width: 28px;
+      border-radius: 999px;
+      color: rgba(255,255,255,0.72);
+      transition: background 140ms ease, color 140ms ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    .btn:active { background: rgba(255,255,255,0.18); }
+    .btn:focus { outline: none; }
+    .btn:focus-visible { outline: none; }
+    .btn::-moz-focus-inner { border: 0; }
+    .btn svg { width: 14px; height: 14px; display: block; }
+    .btn.reset {
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      padding: 0 10px 0 12px;
+      gap: 6px;
+      color: rgba(255,255,255,0.72);
+    }
+    .btn.reset .kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1;
+      color: rgba(255,255,255,0.88);
+      background: rgba(255,255,255,0.12);
+      border-radius: 4px;
+    }
+
+    .count {
+      font-variant-numeric: tabular-nums;
+      color: #fff;
+      font-weight: 500;
+      padding: 0 8px;
+      min-width: 42px;
+      text-align: center;
+      font-size: 12px;
+    }
+    .count .sep { color: rgba(255,255,255,0.45); margin: 0 3px; font-weight: 400; }
+    .count .total { color: rgba(255,255,255,0.55); }
+
+    .divider {
+      width: 1px;
+      height: 14px;
+      background: rgba(255,255,255,0.18);
+      margin: 0 2px;
+    }
+
+    /* ── Print: one page per slide, no chrome ────────────────────────────
+       The screen layout stacks every slide at inset:0 inside a scaled
+       canvas; for print we want them in document flow at the authored
+       design size so the browser paginates one slide per sheet. The
+       @page size is set from the width/height attributes via the inline
+       <style id="deck-stage-print-page"> that connectedCallback injects
+       into <head> (the @page at-rule has no effect inside shadow DOM). */
+    @media print {
+      :host {
+        position: static;
+        inset: auto;
+        background: none;
+        overflow: visible;
+        color: inherit;
+      }
+      .stage { position: static; display: block; }
+      .canvas {
+        transform: none !important;
+        width: auto !important;
+        height: auto !important;
+        background: none;
+        will-change: auto;
+      }
+      ::slotted(*) {
+        position: relative !important;
+        inset: auto !important;
+        width: var(--deck-design-w) !important;
+        height: var(--deck-design-h) !important;
+        box-sizing: border-box !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto;
+        break-after: page;
+        page-break-after: always;
+        break-inside: avoid;
+        overflow: hidden;
+      }
+      ::slotted(*:last-child) {
+        break-after: auto;
+        page-break-after: auto;
+      }
+      .overlay, .tapzones { display: none !important; }
+    }
+  `;
+
+  class DeckStage extends HTMLElement {
+    static get observedAttributes() { return ['width', 'height', 'noscale']; }
+
+    constructor() {
+      super();
+      this._root = this.attachShadow({ mode: 'open' });
+      this._index = 0;
+      this._slides = [];
+      this._notes = [];
+      this._hideTimer = null;
+      this._mouseIdleTimer = null;
+      this._storageKey = STORAGE_PREFIX + (location.pathname || '/');
+
+      this._onKey = this._onKey.bind(this);
+      this._onResize = this._onResize.bind(this);
+      this._onSlotChange = this._onSlotChange.bind(this);
+      this._onMouseMove = this._onMouseMove.bind(this);
+      this._onTapBack = this._onTapBack.bind(this);
+      this._onTapForward = this._onTapForward.bind(this);
+    }
+
+    get designWidth() {
+      return parseInt(this.getAttribute('width'), 10) || DESIGN_W_DEFAULT;
+    }
+    get designHeight() {
+      return parseInt(this.getAttribute('height'), 10) || DESIGN_H_DEFAULT;
+    }
+
+    connectedCallback() {
+      this._render();
+      this._loadNotes();
+      this._syncPrintPageRule();
+      window.addEventListener('keydown', this._onKey);
+      window.addEventListener('resize', this._onResize);
+      window.addEventListener('mousemove', this._onMouseMove, { passive: true });
+      // Initial collection + layout happens via slotchange, which fires on mount.
+    }
+
+    disconnectedCallback() {
+      window.removeEventListener('keydown', this._onKey);
+      window.removeEventListener('resize', this._onResize);
+      window.removeEventListener('mousemove', this._onMouseMove);
+      if (this._hideTimer) clearTimeout(this._hideTimer);
+      if (this._mouseIdleTimer) clearTimeout(this._mouseIdleTimer);
+    }
+
+    attributeChangedCallback() {
+      if (this._canvas) {
+        this._canvas.style.width = this.designWidth + 'px';
+        this._canvas.style.height = this.designHeight + 'px';
+        this._canvas.style.setProperty('--deck-design-w', this.designWidth + 'px');
+        this._canvas.style.setProperty('--deck-design-h', this.designHeight + 'px');
+        this._fit();
+        this._syncPrintPageRule();
+      }
+    }
+
+    _render() {
+      const style = document.createElement('style');
+      style.textContent = stylesheet;
+
+      const stage = document.createElement('div');
+      stage.className = 'stage';
+
+      const canvas = document.createElement('div');
+      canvas.className = 'canvas';
+      canvas.style.width = this.designWidth + 'px';
+      canvas.style.height = this.designHeight + 'px';
+      canvas.style.setProperty('--deck-design-w', this.designWidth + 'px');
+      canvas.style.setProperty('--deck-design-h', this.designHeight + 'px');
+
+      const slot = document.createElement('slot');
+      slot.addEventListener('slotchange', this._onSlotChange);
+      canvas.appendChild(slot);
+      stage.appendChild(canvas);
+
+      // Tap zones (mobile): left third = back, right third = forward.
+      const tapzones = document.createElement('div');
+      tapzones.className = 'tapzones export-hidden';
+      tapzones.setAttribute('aria-hidden', 'true');
+      const tzBack = document.createElement('div');
+      tzBack.className = 'tapzone tapzone--back';
+      const tzMid = document.createElement('div');
+      tzMid.className = 'tapzone tapzone--mid';
+      tzMid.style.pointerEvents = 'none';
+      const tzFwd = document.createElement('div');
+      tzFwd.className = 'tapzone tapzone--fwd';
+      tzBack.addEventListener('click', this._onTapBack);
+      tzFwd.addEventListener('click', this._onTapForward);
+      tapzones.append(tzBack, tzMid, tzFwd);
+
+      // Overlay: compact, solid black, with clickable controls.
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay export-hidden';
+      overlay.setAttribute('role', 'toolbar');
+      overlay.setAttribute('aria-label', 'Deck controls');
+      overlay.innerHTML = `
+        <button class="btn prev" type="button" aria-label="Previous slide" title="Previous (←)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>
+        </button>
+        <span class="count" aria-live="polite"><span class="current">1</span><span class="sep">/</span><span class="total">1</span></span>
+        <button class="btn next" type="button" aria-label="Next slide" title="Next (→)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+        <span class="divider"></span>
+        <button class="btn reset" type="button" aria-label="Reset to first slide" title="Reset (R)">Reset<span class="kbd">R</span></button>
+      `;
+
+      overlay.querySelector('.prev').addEventListener('click', () => this._go(this._index - 1, 'click'));
+      overlay.querySelector('.next').addEventListener('click', () => this._go(this._index + 1, 'click'));
+      overlay.querySelector('.reset').addEventListener('click', () => this._go(0, 'click'));
+
+      this._root.append(style, stage, tapzones, overlay);
+      this._canvas = canvas;
+      this._slot = slot;
+      this._overlay = overlay;
+      this._countEl = overlay.querySelector('.current');
+      this._totalEl = overlay.querySelector('.total');
+    }
+
+    /** @page must live in the document stylesheet — it's a no-op inside
+     *  shadow DOM. Inject/update a single <head> style tag so the print
+     *  sheet matches the design size and Save-as-PDF yields one slide per
+     *  page with no margins. */
+    _syncPrintPageRule() {
+      const id = 'deck-stage-print-page';
+      let tag = document.getElementById(id);
+      if (!tag) {
+        tag = document.createElement('style');
+        tag.id = id;
+        document.head.appendChild(tag);
+      }
+      tag.textContent =
+        '@page { size: ' + this.designWidth + 'px ' + this.designHeight + 'px; margin: 0; } ' +
+        '@media print { html, body { margin: 0 !important; padding: 0 !important; background: none !important; overflow: visible !important; height: auto !important; } ' +
+        '* { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }';
+    }
+
+    _onSlotChange() {
+      this._collectSlides();
+      this._restoreIndex();
+      this._applyIndex({ showOverlay: false, broadcast: true, reason: 'init' });
+      this._fit();
+    }
+
+    _collectSlides() {
+      const assigned = this._slot.assignedElements({ flatten: true });
+      this._slides = assigned.filter((el) => {
+        // Skip template/style/script nodes even if someone slots them.
+        const tag = el.tagName;
+        return tag !== 'TEMPLATE' && tag !== 'SCRIPT' && tag !== 'STYLE';
+      });
+
+      this._slides.forEach((slide, i) => {
+        const n = i + 1;
+        // Determine a label for comment flow: prefer explicit data-label,
+        // then an existing data-screen-label, then first heading, else "Slide".
+        let label = slide.getAttribute('data-label');
+        if (!label) {
+          const existing = slide.getAttribute('data-screen-label');
+          if (existing) {
+            // Strip any leading number the author may have included.
+            label = existing.replace(/^\s*\d+\s*/, '').trim() || existing;
+          }
+        }
+        if (!label) {
+          const h = slide.querySelector('h1, h2, h3, [data-title]');
+          if (h) label = (h.textContent || '').trim().slice(0, 40);
+        }
+        if (!label) label = 'Slide';
+        slide.setAttribute('data-screen-label', `${pad2(n)} ${label}`);
+
+        // Validation attribute for comment flow / auto-checks.
+        if (!slide.hasAttribute('data-om-validate')) {
+          slide.setAttribute('data-om-validate', VALIDATE_ATTR);
+        }
+
+        slide.setAttribute('data-deck-slide', String(i));
+      });
+
+      if (this._totalEl) this._totalEl.textContent = String(this._slides.length || 1);
+      if (this._index >= this._slides.length) this._index = Math.max(0, this._slides.length - 1);
+    }
+
+    _loadNotes() {
+      const tag = document.getElementById('speaker-notes');
+      if (!tag) { this._notes = []; return; }
+      try {
+        const parsed = JSON.parse(tag.textContent || '[]');
+        if (Array.isArray(parsed)) this._notes = parsed;
+      } catch (e) {
+        console.warn('[deck-stage] Failed to parse #speaker-notes JSON:', e);
+        this._notes = [];
+      }
+    }
+
+    _restoreIndex() {
+      try {
+        const raw = localStorage.getItem(this._storageKey);
+        if (raw != null) {
+          const n = parseInt(raw, 10);
+          if (Number.isFinite(n) && n >= 0 && n < this._slides.length) {
+            this._index = n;
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    _persistIndex() {
+      try { localStorage.setItem(this._storageKey, String(this._index)); }
+      catch (e) { /* ignore */ }
+    }
+
+    _applyIndex({ showOverlay = true, broadcast = true, reason = 'init' } = {}) {
+      if (!this._slides.length) return;
+      const prev = this._prevIndex == null ? -1 : this._prevIndex;
+      const curr = this._index;
+      this._slides.forEach((s, i) => {
+        if (i === curr) s.setAttribute('data-deck-active', '');
+        else s.removeAttribute('data-deck-active');
+      });
+      if (this._countEl) this._countEl.textContent = String(curr + 1);
+      this._persistIndex();
+
+      if (broadcast) {
+        // (1) Legacy: host-window postMessage for speaker-notes renderers.
+        try { window.postMessage({ slideIndexChanged: curr }, '*'); } catch (e) {}
+
+        // (2) In-page CustomEvent on the <deck-stage> element itself.
+        //     Bubbles and composes out of shadow DOM so slide code can listen:
+        //       document.querySelector('deck-stage').addEventListener('slidechange', e => {
+        //         e.detail.index, e.detail.previousIndex, e.detail.total, e.detail.slide, e.detail.reason
+        //       });
+        const detail = {
+          index: curr,
+          previousIndex: prev,
+          total: this._slides.length,
+          slide: this._slides[curr] || null,
+          previousSlide: prev >= 0 ? (this._slides[prev] || null) : null,
+          reason: reason, // 'init' | 'keyboard' | 'click' | 'tap' | 'api'
+        };
+        this.dispatchEvent(new CustomEvent('slidechange', {
+          detail,
+          bubbles: true,
+          composed: true,
+        }));
+      }
+
+      this._prevIndex = curr;
+      if (showOverlay) this._flashOverlay();
+    }
+
+    _flashOverlay() {
+      if (!this._overlay) return;
+      this._overlay.setAttribute('data-visible', '');
+      if (this._hideTimer) clearTimeout(this._hideTimer);
+      this._hideTimer = setTimeout(() => {
+        this._overlay.removeAttribute('data-visible');
+      }, OVERLAY_HIDE_MS);
+    }
+
+    _fit() {
+      if (!this._canvas) return;
+      // PPTX export sets noscale so the DOM capture sees authored-size
+      // geometry — the scaled canvas is in shadow DOM, so the exporter's
+      // resetTransformSelector can't reach .canvas.style.transform directly.
+      if (this.hasAttribute('noscale')) {
+        this._canvas.style.transform = 'none';
+        return;
+      }
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const s = Math.min(vw / this.designWidth, vh / this.designHeight);
+      this._canvas.style.transform = `scale(${s})`;
+    }
+
+    _onResize() { this._fit(); }
+
+    _onMouseMove() {
+      // Keep overlay visible while mouse moves; hide after idle.
+      this._flashOverlay();
+    }
+
+    _onTapBack(e) {
+      e.preventDefault();
+      this._go(this._index - 1, 'tap');
+    }
+
+    _onTapForward(e) {
+      e.preventDefault();
+      this._go(this._index + 1, 'tap');
+    }
+
+    _onKey(e) {
+      // Ignore when the user is typing.
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const key = e.key;
+      let handled = true;
+
+      if (key === 'ArrowRight' || key === 'PageDown' || key === ' ' || key === 'Spacebar') {
+        this._go(this._index + 1, 'keyboard');
+      } else if (key === 'ArrowLeft' || key === 'PageUp') {
+        this._go(this._index - 1, 'keyboard');
+      } else if (key === 'Home') {
+        this._go(0, 'keyboard');
+      } else if (key === 'End') {
+        this._go(this._slides.length - 1, 'keyboard');
+      } else if (key === 'r' || key === 'R') {
+        this._go(0, 'keyboard');
+      } else if (/^[0-9]$/.test(key)) {
+        // 1..9 jump to that slide; 0 jumps to 10.
+        const n = key === '0' ? 9 : parseInt(key, 10) - 1;
+        if (n < this._slides.length) this._go(n, 'keyboard');
+      } else {
+        handled = false;
+      }
+
+      if (handled) {
+        e.preventDefault();
+        this._flashOverlay();
+      }
+    }
+
+    _go(i, reason = 'api') {
+      if (!this._slides.length) return;
+      const clamped = Math.max(0, Math.min(this._slides.length - 1, i));
+      if (clamped === this._index) {
+        this._flashOverlay();
+        return;
+      }
+      this._index = clamped;
+      this._applyIndex({ showOverlay: true, broadcast: true, reason });
+    }
+
+    // Public API ------------------------------------------------------------
+
+    /** Current slide index (0-based). */
+    get index() { return this._index; }
+    /** Total slide count. */
+    get length() { return this._slides.length; }
+    /** Programmatically navigate. */
+    goTo(i) { this._go(i, 'api'); }
+    next() { this._go(this._index + 1, 'api'); }
+    prev() { this._go(this._index - 1, 'api'); }
+    reset() { this._go(0, 'api'); }
+  }
+
+  if (!customElements.get('deck-stage')) {
+    customElements.define('deck-stage', DeckStage);
+  }
+})();
+</script>
+<style>
+:root {
+  --navy:   #0D1B3E;
+  --blue:   #2B5CC8;
+  --blue-m: #4A7FD4;
+  --cyan:   #7DD3F0;
+  --coral:  #F47B5A;
+  --white:  #F7F8FC;
+  --gray:   #6B7A99;
+  --border: #DDDDDD;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{margin:0;font-family:'DM Sans',sans-serif}
+section{font-family:'DM Sans',sans-serif;background:var(--white);color:var(--navy)}
+section.dk{background:var(--navy);color:white}
+section.bl{background:var(--blue);color:white}
+
+/* inner */
+.s{width:100%;height:100%;padding:88px 120px 72px;display:flex;flex-direction:column;position:relative}
+.sc{justify-content:center;align-items:center;text-align:center}
+
+/* type */
+.bc{font-family:'Barlow Condensed',sans-serif}
+.d{font-family:'Barlow Condensed',sans-serif;font-size:96px;font-weight:900;line-height:1}
+.h1{font-family:'Barlow Condensed',sans-serif;font-size:76px;font-weight:800;line-height:1.05}
+.h2{font-family:'Barlow Condensed',sans-serif;font-size:60px;font-weight:800;line-height:1.1}
+.h3{font-family:'Barlow Condensed',sans-serif;font-size:44px;font-weight:700;line-height:1.15}
+.body{font-size:28px;font-weight:400;line-height:1.5}
+.sm{font-size:24px;line-height:1.5}
+.eye{font-size:24px;font-weight:500;text-transform:uppercase;letter-spacing:.12em;color:var(--coral)}
+.bl .eye,.dk .eye{color:var(--cyan)}
+
+/* colors */
+.coral{color:var(--coral)} .cyan{color:var(--cyan)} .g{color:var(--gray)}
+.wh{color:white} .nv{color:var(--navy)} .blue{color:var(--blue)}
+
+/* footer */
+.ft{position:absolute;bottom:32px;left:120px;right:120px;display:flex;align-items:center;justify-content:space-between}
+.ft-brand{font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:900;letter-spacing:.14em;opacity:.25;color:inherit}
+.ft-pg{font-size:16px;font-weight:400;opacity:.25}
+
+/* accent bar */
+.ab{width:64px;height:4px;background:var(--coral);border-radius:2px;margin-bottom:28px}
+
+/* gap helpers */
+.g1{gap:12px} .g2{gap:20px} .g3{gap:28px} .g4{gap:40px}
+.mt2{margin-top:20px} .mt3{margin-top:32px} .mt4{margin-top:44px} .mt5{margin-top:56px}
+.flex{display:flex} .col{flex-direction:column} .f1{flex:1}
+.gr2{display:grid;grid-template-columns:1fr 1fr;gap:32px}
+.gr3{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.gr4{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.gr5{display:grid;grid-template-columns:repeat(5,1fr);gap:16px}
+
+/* card */
+.card{background:white;border-radius:14px;padding:36px 40px}
+.card-dim{background:rgba(255,255,255,.1);border-radius:14px;padding:36px 40px}
+.card-tint{background:rgba(43,92,200,.07);border-radius:14px;padding:36px 40px}
+
+/* todo */
+.todo-list{columns:3;column-gap:32px;margin-top:28px;flex:1}
+.todo-item{font-size:22px;color:rgba(255,255,255,.6);padding:4px 0 4px 22px;position:relative;break-inside:avoid;line-height:1.3}
+.todo-item::before{content:'☐';position:absolute;left:0;color:var(--cyan)}
+
+/* tool cards */
+.tool-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:32px;flex:1}
+.tool-card{background:white;border-radius:12px;padding:24px 28px;border-left:5px solid;display:flex;flex-direction:column;gap:8px}
+.tn{font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:var(--navy);display:flex;align-items:center;justify-content:space-between}
+.tsnip{font-family:'SF Mono','Fira Code',monospace;font-size:18px;color:var(--gray)}
+.tnote{font-size:24px;color:var(--gray);font-style:italic;line-height:1.3}
+.badge{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:3px 12px;border-radius:999px}
+.b-red{background:#FED7D7;color:#9B2C2C} .b-amber{background:#FEEBC8;color:#744210}
+.b-yellow{background:#FEFCBF;color:#744210} .b-blue{background:#EBF4FF;color:#2A4365}
+.b-green{background:#C6F6D5;color:#276749}
+
+/* dashboard mockup */
+.mock{background:white;border-radius:14px;overflow:hidden;flex:1;display:flex;flex-direction:column;box-shadow:0 6px 32px rgba(13,27,62,.1);margin-top:20px}
+.mock-hdr{background:var(--navy);padding:14px 24px;display:flex;align-items:center;justify-content:space-between}
+.mock-hdr-t{font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:700;color:white;letter-spacing:.04em}
+.mock-body{flex:1;display:grid;grid-template-columns:1.6fr 1fr}
+.mock-main{padding:20px 24px;border-right:1px solid var(--border)}
+.mock-side{padding:20px 20px}
+.mock-sec{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--gray);margin-bottom:10px;margin-top:14px}
+.mock-row{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:var(--white);border-radius:7px;margin-bottom:6px;font-size:15px;color:var(--navy)}
+.mock-prog{margin-bottom:12px}
+.mock-prog-lbl{display:flex;justify-content:space-between;font-size:12px;color:var(--gray);margin-bottom:3px}
+.mock-bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.mock-fill{height:100%;background:var(--blue);border-radius:3px}
+.mock-ai{background:rgba(43,92,200,.07);border-radius:8px;padding:12px 14px;margin-top:10px}
+.mock-ai-t{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--blue);margin-bottom:4px}
+.mock-ai-m{font-size:13px;color:var(--navy);line-height:1.4}
+
+/* phases */
+.phases{display:grid;grid-template-columns:repeat(3,1fr);flex:1;margin-top:36px}
+.phase{padding:36px 44px;display:flex;flex-direction:column;gap:14px;border-right:2px solid var(--border)}
+.phase:last-child{border-right:none}
+.p-num{font-family:'Barlow Condensed',sans-serif;font-size:40px;font-weight:900;color:var(--coral)}
+.p-title{font-family:'Barlow Condensed',sans-serif;font-size:34px;font-weight:800;color:var(--navy)}
+.p-tag{font-size:22px;color:var(--gray)}
+.p-list{list-style:none;display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.p-list li{font-size:22px;color:var(--navy);padding-left:18px;position:relative;line-height:1.3}
+.p-list li::before{content:'→';position:absolute;left:0;color:var(--coral)}
+.p-inv{margin-top:auto;font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:var(--blue)}
+
+/* moats */
+.moats{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:18px;flex:1;margin-top:32px}
+.moat{background:white;border-radius:12px;padding:28px 32px;display:flex;flex-direction:column;gap:8px}
+.moat-n{font-family:'Barlow Condensed',sans-serif;font-size:32px;font-weight:900;color:var(--coral)}
+.moat-t{font-family:'Barlow Condensed',sans-serif;font-size:28px;font-weight:800;color:var(--navy)}
+.moat-b{font-size:24px;color:var(--gray);line-height:1.4}
+
+/* forces */
+.force{display:flex;gap:32px;align-items:flex-start;background:white;border-radius:12px;padding:28px 36px}
+.fn{font-family:'Barlow Condensed',sans-serif;font-size:44px;font-weight:900;color:var(--coral);flex-shrink:0;line-height:1;width:48px}
+.ft2{font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:800;color:var(--navy);margin-bottom:6px}
+.fb{font-size:24px;color:var(--gray);line-height:1.4}
+
+/* team */
+.team-grid{display:flex;gap:16px;margin-top:32px;flex:1}
+.team-card{flex:1;background:white;border-radius:12px;overflow:hidden}
+.team-photo{width:100%;height:190px;object-fit:cover;background:var(--border);display:flex;align-items:center;justify-content:center}
+.team-photo img{width:100%;height:100%;object-fit:cover;object-position:top center}
+.team-info{padding:20px 24px}
+.t-role{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--coral);margin-bottom:4px}
+.t-name{font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:800;color:var(--navy);margin-bottom:4px}
+.t-bio{font-size:17px;color:var(--gray);line-height:1.4}
+
+/* feature table */
+table.comp{width:100%;border-collapse:collapse;margin-top:36px}
+table.comp th{font-size:19px;font-weight:600;color:var(--gray);text-align:center;padding:14px 10px;border-bottom:2px solid var(--border)}
+table.comp th:first-child{text-align:left;color:var(--navy)}
+table.comp td{font-size:21px;padding:16px 10px;border-bottom:1px solid var(--border);text-align:center}
+table.comp td:first-child{text-align:left}
+table.comp tr.epic{background:rgba(43,92,200,.05)}
+table.comp tr.epic td:first-child{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:24px;color:var(--blue)}
+.ck{color:var(--coral);font-weight:700;font-size:24px} .cx{color:var(--border);font-size:24px}
+
+/* quadrant */
+.quadrant{position:relative;width:580px;height:580px;flex-shrink:0}
+.q-axis-h{position:absolute;top:50%;left:5%;right:5%;height:2px;background:var(--border)}
+.q-axis-v{position:absolute;left:50%;top:5%;bottom:5%;width:2px;background:var(--border)}
+.q-lbl{position:absolute;font-size:15px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--gray)}
+.q-dot{position:absolute;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-direction:column}
+
+/* econ */
+.econ-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-top:36px;flex:1}
+.econ-card{background:white;border-radius:14px;padding:36px 32px}
+.econ-num{font-family:'Barlow Condensed',sans-serif;font-size:52px;font-weight:900;color:var(--coral);line-height:1;margin-bottom:10px}
+.econ-lbl{font-family:'Barlow Condensed',sans-serif;font-size:24px;font-weight:800;color:var(--navy);margin-bottom:6px}
+.econ-desc{font-size:24px;color:var(--gray);line-height:1.4}
+
+/* bars */
+.bars-wrap{display:flex;align-items:flex-end;gap:14px;height:380px}
+.bw{display:flex;flex-direction:column;align-items:center;gap:8px;flex:1}
+.bv{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:700;color:var(--navy)}
+.bar{width:100%;border-radius:7px 7px 0 0}
+.bl-bar{color:white;background:rgba(255,255,255,.12);padding:6px 10px;border-radius:6px;font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:700}
+.bar-lbl{font-size:18px;color:var(--gray);font-weight:500}
+
+/* advisor */
+.adv{background:white;border-radius:14px;padding:36px 40px;display:flex;flex-direction:column;gap:10px}
+.adv-t{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--coral)}
+.adv-n{font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:800;color:var(--navy)}
+.adv-b{font-size:24px;color:var(--gray);line-height:1.5}
+</style>
+</head>
+<body>
+<deck-stage width="1920" height="1080">
+
+<!-- 01 Hook Opening -->
+<section class="bl" data-label="Hook">
+<div class="s sc">
+  <div class="eye" style="margin-bottom:36px;color:rgba(255,255,255,.5);font-size:24px;">WHITMAN CAPSTONE DAY · APRIL 24, 2026</div>
+  <div class="h1 wh" style="font-size:72px;max-width:1300px;margin-bottom:64px;">The judges are about to watch <span class="coral">55 teams</span> pitch today.</div>
+  <div class="flex g4" style="align-items:flex-start;">
+    <div style="text-align:center;">
+      <div class="bc coral" style="font-size:160px;font-weight:900;line-height:1;">120</div>
+      <div class="sm wh" style="opacity:.65;margin-top:6px;text-transform:uppercase;letter-spacing:.08em;">hours of manual work</div>
+    </div>
+    <div style="font-size:80px;color:rgba(255,255,255,.15);font-weight:200;margin-top:24px;">·</div>
+    <div style="text-align:center;">
+      <div class="bc coral" style="font-size:160px;font-weight:900;line-height:1;">7+</div>
+      <div class="sm wh" style="opacity:.65;margin-top:6px;text-transform:uppercase;letter-spacing:.08em;">disconnected tools</div>
+    </div>
+    <div style="font-size:80px;color:rgba(255,255,255,.15);font-weight:200;margin-top:24px;">·</div>
+    <div style="text-align:center;">
+      <div class="bc coral" style="font-size:160px;font-weight:900;line-height:1;">4</div>
+      <div class="sm wh" style="opacity:.65;margin-top:6px;text-transform:uppercase;letter-spacing:.08em;">months of planning</div>
+    </div>
+  </div>
+  <div style="margin-top:52px;font-size:28px;color:rgba(255,255,255,.4);font-style:italic;">Here's what it took to make that happen.</div>
+</div>
+</section>
+
+<!-- 02 Planning Reality -->
+<section class="bl" data-label="Planning Reality">
+<div class="s">
+  <div class="eye">The Planning Reality</div>
+  <div class="h2 wh" style="margin-top:10px;margin-bottom:0;">Every single item. Manually tracked across Excel, email, and memory.</div>
+  <div class="todo-list">
+    <div class="todo-item">Set the dates</div><div class="todo-item">Book rooms</div><div class="todo-item">Judges registration form</div><div class="todo-item">Judges invitation</div><div class="todo-item">Calendar blocks for orientation</div><div class="todo-item">Request photographer</div><div class="todo-item">Order food for reception</div><div class="todo-item">Order food for judges lunch</div><div class="todo-item">Order judges gifts</div><div class="todo-item">Order student worker shirts</div><div class="todo-item">Request DPS for NVRC</div><div class="todo-item">Schedule run of show meeting</div><div class="todo-item">Secure faculty for business plan reviews</div><div class="todo-item">Setup parking for judges</div><div class="todo-item">Zoom webinar link setup</div><div class="todo-item">Request writer</div><div class="todo-item">Slides for Flaum/Lender</div><div class="todo-item">Slides for digital signage</div><div class="todo-item">Order supplies for room boxes</div><div class="todo-item">Update rubrics</div><div class="todo-item">Alumni watch party invitation</div><div class="todo-item">Faculty and staff invitation</div><div class="todo-item">Excel formulas for determining winners</div><div class="todo-item">Assign judges and teams to rooms</div><div class="todo-item">Run of show document</div><div class="todo-item">Student timekeepers</div><div class="todo-item">Assemble room boxes for timekeepers</div><div class="todo-item">Notes for student volunteer meeting</div><div class="todo-item">G Drive update (1st)</div><div class="todo-item">Digital signage sent to Dawn</div><div class="todo-item">Judges ranking form — online</div><div class="todo-item">Make new Mentimeter form</div><div class="todo-item">Judges email with day-of details</div><div class="todo-item">Business plan reviewer email</div><div class="todo-item">Run of show meeting with team</div><div class="todo-item">Student worker details email</div><div class="todo-item">Bottled water for judges</div><div class="todo-item">Print QR codes for voting</div><div class="todo-item">Podium script</div><div class="todo-item">Notes for judges orientation</div><div class="todo-item">Judges meeting slides</div><div class="todo-item">Student nametags for timekeepers</div><div class="todo-item">Nametags for judges</div><div class="todo-item">Print judges sign-in sheet</div><div class="todo-item">Judges room packets</div><div class="todo-item">Winners certificates</div><div class="todo-item">Print 4 copies of run of show</div><div class="todo-item">G Drive update (3rd)</div><div class="todo-item">Download team slides / create folder</div><div class="todo-item">CART and CC</div><div class="todo-item">G Drive update (2nd)</div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">02</span></div>
+</div>
+</section>
+
+<!-- 03 Status Quo -->
+<section data-label="Status Quo">
+<div class="s">
+  <div class="eye">April 24, 2026 · Whitman School</div>
+  <div class="h2" style="margin-top:10px;">Here's how it got planned.</div>
+  <div class="tool-grid">
+    <div class="tool-card" style="border-color:#E53E3E;">
+      <div class="tn">Google Sheets <span class="badge b-red">CONFLICT</span></div>
+      <div class="tsnip">Capstone_Schedule_v7_FINAL_REAL.xlsx</div>
+      <div class="tnote">Room 011 double-booked at 1pm. Two teams, one room.</div>
+    </div>
+    <div class="tool-card" style="border-color:#DD6B20;">
+      <div class="tn">Gmail <span class="badge b-amber">STALE</span></div>
+      <div class="tsnip">Re: Re: Re: Judge arrivals</div>
+      <div class="tnote">8 people cc'd. 4 different arrival times. Most recent reply: 11 days ago.</div>
+    </div>
+    <div class="tool-card" style="border-color:#D69E2E;">
+      <div class="tn">Slack #capstone <span class="badge b-yellow">NO REPLY</span></div>
+      <div class="tsnip">"Has anyone confirmed catering?"</div>
+      <div class="tnote">@heath: "I thought you were handling it?" No response since.</div>
+    </div>
+    <div class="tool-card" style="border-color:var(--blue-m);">
+      <div class="tn">Google Docs <span class="badge b-blue">DUPLICATES</span></div>
+      <div class="tsnip">Judge_Assignments_DRAFT</div>
+      <div class="tnote">3 names spelled two different ways. 5 alumni + 10 investors.</div>
+    </div>
+    <div class="tool-card" style="border-color:#E53E3E;">
+      <div class="tn">WhatsApp <span class="badge b-red">URGENT</span></div>
+      <div class="tsnip">"AV in 111 or 113??" — 6:47 AM</div>
+      <div class="tnote">No reply from setup crew. Event in 5 hours.</div>
+    </div>
+    <div class="tool-card" style="border-color:#E53E3E;">
+      <div class="tn">Airtable <span class="badge b-red">WRONG DATE</span></div>
+      <div class="tsnip">Vendors (copy 3)</div>
+      <div class="tnote">Catering confirmed April 24. Signage confirmed April 25. Wrong date.</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">03</span></div>
+</div>
+</section>
+
+<!-- 04 EpicenTra Version -->
+<section data-label="EpicenTra Version">
+<div class="s" style="padding-bottom:48px;">
+  <div class="flex" style="align-items:flex-start;justify-content:space-between;gap:32px;">
+    <div>
+      <div class="eye">The EpicenTra Version</div>
+      <div class="h2" style="margin-top:8px;">Here's how it would have looked.</div>
+    </div>
+    <div style="background:var(--blue);color:white;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:22px;padding:14px 28px;border-radius:10px;letter-spacing:.06em;flex-shrink:0;margin-top:12px;">✓ ALL SYSTEMS GO</div>
+  </div>
+  <div class="mock">
+    <div class="mock-hdr">
+      <div class="mock-hdr-t">CAPSTONE PITCH DAY 2026 — Friday, April 24 · Whitman School of Management</div>
+      <span class="badge b-green">✓ All Systems Go</span>
+    </div>
+    <div class="mock-body">
+      <div class="mock-main">
+        <div class="mock-sec">Timeline</div>
+        <div class="mock-row"><span><strong>11:30 AM</strong> — Judge check-in · Whitman lobby</span><span class="badge b-green">Confirmed</span></div>
+        <div class="mock-row"><span><strong>12:30 PM</strong> — Round 1 begins · Rooms 011, 013, 101, 103</span><span class="badge b-green">Confirmed</span></div>
+        <div class="mock-row"><span><strong>3:00 PM</strong> — Round 1 close · Scoring window opens</span><span class="badge b-green">On Track</span></div>
+        <div class="mock-row"><span><strong>3:45 PM</strong> — Round 2 begins · Rooms 201, 203</span><span class="badge b-green">Confirmed</span></div>
+        <div class="mock-row"><span><strong>5:00 PM</strong> — Judging complete · Winners announced</span><span class="badge" style="background:#EBF4FF;color:#2A4365;">Pending</span></div>
+        <div class="mock-sec" style="margin-top:16px;">Vendors & Logistics</div>
+        <div class="mock-row"><span>SU Dining — Catering</span><span class="badge b-green">✓ Confirmed</span></div>
+        <div class="mock-row"><span>Whitman AV — Projectors</span><span class="badge b-green">✓ Confirmed</span></div>
+        <div class="mock-row"><span>Campus Print — Signage</span><span class="badge b-green">✓ Delivered</span></div>
+      </div>
+      <div class="mock-side">
+        <div class="mock-sec">Setup Progress</div>
+        <div class="mock-prog"><div class="mock-prog-lbl"><span>Vendor contracts</span><span>100%</span></div><div class="mock-bar"><div class="mock-fill" style="width:100%;background:var(--coral);"></div></div></div>
+        <div class="mock-prog"><div class="mock-prog-lbl"><span>Staff assignments</span><span>100%</span></div><div class="mock-bar"><div class="mock-fill" style="width:100%;background:var(--coral);"></div></div></div>
+        <div class="mock-prog"><div class="mock-prog-lbl"><span>Run of show</span><span>80%</span></div><div class="mock-bar"><div class="mock-fill" style="width:80%"></div></div></div>
+        <div class="mock-prog"><div class="mock-prog-lbl"><span>Permits + insurance</span><span>60%</span></div><div class="mock-bar"><div class="mock-fill" style="width:60%"></div></div></div>
+        <div class="mock-ai">
+          <div class="mock-ai-t">AI Agent</div>
+          <div class="mock-ai-m">✓ <strong>Conflict resolved</strong> — Room 011 double-booking fixed. Team C reassigned to 013. Both teams notified automatically.</div>
+        </div>
+        <div class="mock-ai">
+          <div class="mock-ai-t">AI Agent</div>
+          <div class="mock-ai-m">✓ <strong>Vendor auto-confirmed</strong> — SU Dining delivery at 11:45 AM. W-9 and COI on file. No action needed.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">04</span></div>
+</div>
+</section>
+
+<!-- 05 Cover -->
+<section class="dk" data-label="Cover">
+<div class="s sc" style="gap:0;">
+  <div style="width:140px;margin-bottom:32px;"><svg width="100" height="116" viewBox="0 0 520 581" fill="none" xmlns="http://www.w3.org/2000/svg" style="mix-blend-mode:screen">
+<rect width="520" height="581" fill="white"/>
+<path d="M0 181C0 114.726 53.7258 61 120 61H400V61C400 127.274 346.274 181 280 181H0V181Z" fill="#1565C0" fill-opacity="0.8"/>
+<path d="M180 521C113.726 521 60 467.274 60 401L60 121C126.274 121 180 174.726 180 241V521Z" fill="#7CE1FB" fill-opacity="0.8"/>
+<path d="M120 461C120 394.726 173.726 341 240 341H520C520 407.274 466.274 461 400 461H120Z" fill="#5BC5F2" fill-opacity="0.8"/>
+<path d="M460 401C393.726 401 340 347.274 340 281V0C406.274 0 460 53.7258 460 120V401Z" fill="#2089E1" fill-opacity="0.8"/>
+<rect x="335" y="61" width="5" height="120" fill="#F5F5F5"/>
+<rect x="180" y="341" width="5" height="120" fill="#F5F5F5"/>
+<rect x="60" y="186" width="5" height="120" transform="rotate(-90 60 186)" fill="#F5F5F5"/>
+<rect x="340" y="341" width="5" height="120" transform="rotate(-90 340 341)" fill="#F5F5F5"/>
+</svg></div>
+  <div class="bc wh" style="font-size:96px;font-weight:900;letter-spacing:.08em;line-height:1;">EPICEN<span class="coral">TRA</span></div>
+  <div style="width:72px;height:4px;background:var(--coral);border-radius:2px;margin:20px auto 28px;"></div>
+  <div class="bc wh" style="font-size:44px;font-weight:700;line-height:1.2;">Plan Smarter. Launch Faster.</div>
+  <div class="bc" style="font-size:44px;font-weight:700;color:rgba(255,255,255,.4);line-height:1.2;margin-bottom:36px;">Events Redefined.</div>
+  <div class="sm" style="color:rgba(255,255,255,.45);">The AI-native command platform built exclusively for experiential events.</div>
+  <div style="margin-top:48px;font-size:18px;color:rgba(255,255,255,.3);letter-spacing:.12em;text-transform:uppercase;">Team TACO · Whitman Capstone · April 2026</div>
+</div>
+</section>
+
+<!-- 06 Section: Problem -->
+<section class="bl" data-label="Section Problem">
+<div class="s sc">
+  <div style="font-size:24px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);margin-bottom:24px;">Section 01</div>
+  <div class="d wh" style="margin-bottom:20px;">The Problem</div>
+  <div class="ab" style="margin:0 auto 28px;"></div>
+  <div class="body" style="color:rgba(255,255,255,.6);max-width:860px;">What you just felt isn't new. It's what every brand activation manager lives with.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">06</span></div>
+</div>
+</section>
+
+<!-- 07 8–11 Hours -->
+<section class="bl" data-label="Cost in Hours">
+<div class="s sc">
+  <div style="font-size:17px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:20px;">Lost · Every · Week</div>
+  <div class="bc coral" style="font-size:280px;font-weight:900;line-height:1;">8–11</div>
+  <div class="bc wh" style="font-size:64px;font-weight:700;margin-top:0;">hours</div>
+  <div class="body" style="color:rgba(255,255,255,.55);margin-top:20px;max-width:880px;line-height:1.4;">lost per brand activation manager, per week,<br>to manual reconciliation across disconnected tools</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">07</span></div>
+</div>
+</section>
+
+<!-- 08 $2,200 -->
+<section class="bl" data-label="Cost in Dollars">
+<div class="s sc">
+  <div style="font-size:17px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:20px;">Per · Planner · Per · Month</div>
+  <div class="bc coral" style="font-size:240px;font-weight:900;line-height:1;">$2,200</div>
+  <div class="bc wh" style="font-size:56px;font-weight:700;margin-top:4px;">in wasted payroll</div>
+  <div class="body" style="color:rgba(255,255,255,.55);margin-top:20px;max-width:900px;line-height:1.4;">Multiply across a 5-person team. Multiply across 12 months.<br>That's the size of the hole.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">08</span></div>
+</div>
+</section>
+
+<!-- 09 Problem Statement -->
+<section data-label="The Problem">
+<div class="s" style="justify-content:center;">
+  <div class="eye">The Problem</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:32px;">Fragmented stacks cost time, money, and events.</div>
+  <div class="flex col f1" style="gap:20px;">
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="bc coral" style="font-size:64px;font-weight:900;flex-shrink:0;width:64px;line-height:1;">01</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">Fragmented tools. Endless friction.</div>
+    </div>
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="bc coral" style="font-size:64px;font-weight:900;flex-shrink:0;width:64px;line-height:1;">02</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">$1,600–$2,200 in wasted payroll per planner per month.</div>
+    </div>
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="bc coral" style="font-size:64px;font-weight:900;flex-shrink:0;width:64px;line-height:1;">03</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">The mid-market is severely underserved.</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">09</span></div>
+</div>
+</section>
+
+<!-- 10 Section: Solution -->
+<section class="bl" data-label="Section Solution">
+<div class="s sc">
+  <div style="font-size:24px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);margin-bottom:24px;">Section 02</div>
+  <div class="d wh" style="margin-bottom:20px;">The Solution</div>
+  <div class="ab" style="margin:0 auto 28px;"></div>
+  <div class="body" style="color:rgba(255,255,255,.6);max-width:960px;">One platform. Every activation. Built from the ground up for how experiential teams actually work.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">10</span></div>
+</div>
+</section>
+
+<!-- 11 Solution Overview -->
+<section data-label="Solution Overview">
+<div class="s" style="justify-content:center;">
+  <div class="eye">Our Solution</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:36px;">One platform. Every activation.</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:28px;flex:1;align-items:stretch;">
+    <div class="card flex col" style="gap:24px;padding:52px 48px;">
+      <div class="eye" style="font-size:20px;">01</div>
+      <div class="bc" style="font-size:40px;font-weight:900;color:var(--navy);line-height:1.15;">Web Command Center</div>
+      <div style="font-size:28px;color:var(--gray);line-height:1.4;margin-top:8px;">Real-time synchronized hub. Every planner sees the same event state.</div>
+    </div>
+    <div style="background:var(--blue);border-radius:14px;padding:52px 48px;display:flex;flex-direction:column;gap:24px;">
+      <div style="font-size:20px;font-weight:500;text-transform:uppercase;letter-spacing:.1em;color:var(--cyan);">02</div>
+      <div class="bc wh" style="font-size:40px;font-weight:900;line-height:1.15;">AI Agent</div>
+      <div style="font-size:28px;color:rgba(255,255,255,.65);line-height:1.4;margin-top:8px;">Executes vendor outreach and compliance — unattended.</div>
+    </div>
+    <div class="card flex col" style="gap:24px;padding:52px 48px;">
+      <div class="eye" style="font-size:20px;">03</div>
+      <div class="bc" style="font-size:40px;font-weight:900;color:var(--navy);line-height:1.15;">Field Mobile App</div>
+      <div style="font-size:28px;color:var(--gray);line-height:1.4;margin-top:8px;">Geo-fenced check-ins. Live sync. No status calls needed.</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">11</span></div>
+</div>
+</section>
+
+<!-- 12 Platform Features -->
+<section data-label="Platform Features">
+<div class="s" style="justify-content:center;">
+  <div class="eye">Platform Features</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:36px;">Five features. One platform edge.</div>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:20px;flex:1;align-items:stretch;">
+    <div class="card flex col" style="gap:24px;align-items:center;text-align:center;padding:52px 28px;justify-content:center;">
+      <div class="coral bc" style="font-size:72px;font-weight:900;line-height:1;">01</div>
+      <div class="bc" style="font-size:34px;font-weight:800;color:var(--navy);line-height:1.2;">AI Execution Agent</div>
+    </div>
+    <div class="card flex col" style="gap:24px;align-items:center;text-align:center;padding:52px 28px;justify-content:center;">
+      <div class="coral bc" style="font-size:72px;font-weight:900;line-height:1;">02</div>
+      <div class="bc" style="font-size:34px;font-weight:800;color:var(--navy);line-height:1.2;">Experiential Focus</div>
+    </div>
+    <div class="card flex col" style="gap:24px;align-items:center;text-align:center;padding:52px 28px;justify-content:center;">
+      <div class="coral bc" style="font-size:72px;font-weight:900;line-height:1;">03</div>
+      <div class="bc" style="font-size:34px;font-weight:800;color:var(--navy);line-height:1.2;">Vendor Marketplace</div>
+    </div>
+    <div class="card flex col" style="gap:24px;align-items:center;text-align:center;padding:52px 28px;justify-content:center;">
+      <div class="coral bc" style="font-size:72px;font-weight:900;line-height:1;">04</div>
+      <div class="bc" style="font-size:34px;font-weight:800;color:var(--navy);line-height:1.2;">Workflow Templates</div>
+    </div>
+    <div class="card flex col" style="gap:24px;align-items:center;text-align:center;padding:52px 28px;justify-content:center;">
+      <div class="coral bc" style="font-size:72px;font-weight:900;line-height:1;">05</div>
+      <div class="bc" style="font-size:34px;font-weight:800;color:var(--navy);line-height:1.2;">Mobile Integration</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">12</span></div>
+</div>
+</section>
+
+<!-- 13 Product Roadmap -->
+<section data-label="Product Roadmap">
+<div class="s" style="justify-content:center;">
+  <div class="eye">Product Roadmap</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:36px;">Three phases. Full scale by FY5.</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);flex:1;align-items:stretch;">
+    <div style="padding:52px 56px;display:flex;flex-direction:column;gap:28px;border-right:2px solid var(--border);background:white;border-radius:16px 0 0 16px;">
+      <div class="p-num" style="font-size:52px;">Phase 1</div>
+      <div class="bc" style="font-size:48px;font-weight:900;color:var(--navy);line-height:1.1;">Core SaaS Platform</div>
+      <div style="font-size:28px;color:var(--gray);">Months 1–12 · FY1</div>
+      <div style="margin-top:auto;font-family:'Barlow Condensed',sans-serif;font-size:40px;font-weight:700;color:var(--blue);">$400K Seed Round</div>
+    </div>
+    <div style="padding:52px 56px;display:flex;flex-direction:column;gap:28px;background:rgba(43,92,200,.06);">
+      <div class="p-num" style="font-size:52px;">Phase 2</div>
+      <div class="bc" style="font-size:48px;font-weight:900;color:var(--navy);line-height:1.1;">Vendor Marketplace</div>
+      <div style="font-size:28px;color:var(--gray);">Months 13–24 · FY2</div>
+      <div style="margin-top:auto;font-family:'Barlow Condensed',sans-serif;font-size:40px;font-weight:700;color:var(--blue);">~$620K Operating Budget</div>
+    </div>
+    <div style="padding:52px 56px;display:flex;flex-direction:column;gap:28px;background:white;border-radius:0 16px 16px 0;">
+      <div class="p-num" style="font-size:52px;">Phase 3</div>
+      <div class="bc" style="font-size:48px;font-weight:900;color:var(--navy);line-height:1.1;">National Expansion</div>
+      <div style="font-size:28px;color:var(--gray);">Months 25–60 · FY3–FY5</div>
+      <div style="margin-top:auto;font-family:'Barlow Condensed',sans-serif;font-size:40px;font-weight:700;color:var(--blue);">~$1.4M Expansion Budget</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">13</span></div>
+</div>
+</section>
+
+<!-- 14 Section: Competition -->
+<section class="bl" data-label="Section Competition">
+<div class="s sc">
+  <div style="font-size:24px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);margin-bottom:24px;">Section 03</div>
+  <div class="d wh" style="margin-bottom:20px;">Competition</div>
+  <div class="ab" style="margin:0 auto 28px;"></div>
+  <div class="body" style="color:rgba(255,255,255,.6);max-width:860px;">No one else is built for this quadrant.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">14</span></div>
+</div>
+</section>
+
+<!-- 15 Competitive Matrix -->
+<section data-label="Competitive Matrix">
+<div class="s">
+  <div class="eye">Competitive Positioning</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:0;">No one else is built for this.</div>
+  <div class="flex g4 f1 mt4" style="align-items:center;">
+    <!-- Quadrant -->
+    <div class="quadrant" style="position:relative;width:540px;height:540px;flex-shrink:0;">
+      <div class="q-axis-h" style="position:absolute;top:50%;left:4%;right:4%;height:2px;background:var(--border);"></div>
+      <div class="q-axis-v" style="position:absolute;left:50%;top:4%;bottom:4%;width:2px;background:var(--border);"></div>
+      <!-- Labels -->
+      <div style="position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--gray);">Active AI</div>
+      <div style="position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--gray);">Passive Tool</div>
+      <div style="position:absolute;left:2px;top:50%;transform:translateY(-50%) rotate(-90deg);font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--gray);white-space:nowrap;">Generic</div>
+      <div style="position:absolute;right:2px;top:50%;transform:translateY(-50%) rotate(90deg);font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--gray);white-space:nowrap;">Experiential</div>
+      <!-- EpicenTra dot (top-right) -->
+      <div style="position:absolute;top:52px;right:52px;text-align:center;">
+        <div style="width:88px;height:88px;background:var(--coral);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;box-shadow:0 4px 20px rgba(244,123,90,.35);">
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:900;color:white;letter-spacing:.04em;text-align:center;line-height:1.2;">EPICEN<br>TRA</span>
+        </div>
+        <div style="font-size:13px;color:var(--gray);">Only platform<br>in this quadrant</div>
+      </div>
+      <!-- Competitor dots -->
+      <div style="position:absolute;bottom:100px;left:80px;text-align:center;"><div style="width:52px;height:52px;background:var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;"><span style="font-size:11px;font-weight:700;color:var(--gray);">Excel</span></div></div>
+      <div style="position:absolute;bottom:140px;left:150px;text-align:center;"><div style="width:52px;height:52px;background:var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;"><span style="font-size:11px;font-weight:700;color:var(--gray);">Email</span></div></div>
+      <div style="position:absolute;bottom:90px;left:220px;text-align:center;"><div style="width:52px;height:52px;background:var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;"><span style="font-size:10px;font-weight:700;color:var(--gray);">Asana</span></div></div>
+      <div style="position:absolute;top:160px;left:100px;text-align:center;"><div style="width:52px;height:52px;background:var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;"><span style="font-size:9px;font-weight:700;color:var(--gray);">Monday</span></div></div>
+      <div style="position:absolute;bottom:72px;right:90px;text-align:center;"><div style="width:52px;height:52px;background:var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;"><span style="font-size:10px;font-weight:700;color:var(--gray);">Cvent</span></div></div>
+    </div>
+    <!-- Feature table -->
+    <div style="flex:1;">
+      <table class="comp">
+        <thead><tr>
+          <th style="text-align:left;">Platform</th>
+          <th>AI Agent</th><th>Experiential Focus</th><th>Vendor Marketplace</th><th>Templates</th>
+        </tr></thead>
+        <tbody>
+          <tr class="epic"><td>EpicenTra</td><td class="ck">✓</td><td class="ck">✓</td><td class="ck">✓</td><td class="ck">✓</td></tr>
+          <tr><td>Monday.com</td><td class="cx">—</td><td class="cx">—</td><td class="cx">—</td><td class="cx">—</td></tr>
+          <tr><td>Cvent</td><td class="cx">—</td><td class="cx">—</td><td class="ck">✓</td><td class="cx">—</td></tr>
+          <tr><td>Asana</td><td class="cx">—</td><td class="cx">—</td><td class="cx">—</td><td class="ck">✓</td></tr>
+          <tr><td>Excel / Email</td><td class="cx">—</td><td class="cx">—</td><td class="cx">—</td><td class="cx">—</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:24px;font-size:21px;color:var(--gray);line-height:1.5;border-left:4px solid var(--coral);padding-left:20px;">EpicenTra is the <strong style="color:var(--navy);">only platform</strong> with all four capabilities — purpose-built for the experiential marketing vertical.</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">15</span></div>
+</div>
+</section>
+
+<!-- 16 Six Moats -->
+<section data-label="Competitive Advantages">
+<div class="s" style="justify-content:center;">
+  <div class="eye">Competitive Advantage</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:32px;">Six moats. One platform.</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:20px;flex:1;">
+    <div class="card" style="padding:44px;display:flex;flex-direction:column;gap:16px;"><div class="moat-n" style="font-size:44px;">01</div><div class="moat-t" style="font-size:36px;">Vertical Specialization</div></div>
+    <div class="card" style="padding:44px;display:flex;flex-direction:column;gap:16px;"><div class="moat-n" style="font-size:44px;">02</div><div class="moat-t" style="font-size:36px;">AI Execution Agent</div></div>
+    <div class="card" style="padding:44px;display:flex;flex-direction:column;gap:16px;"><div class="moat-n" style="font-size:44px;">03</div><div class="moat-t" style="font-size:36px;">Real-Time Sync</div></div>
+    <div class="card" style="padding:44px;display:flex;flex-direction:column;gap:16px;"><div class="moat-n" style="font-size:44px;">04</div><div class="moat-t" style="font-size:36px;">IP &amp; Data Moat</div></div>
+    <div class="card" style="padding:44px;display:flex;flex-direction:column;gap:16px;"><div class="moat-n" style="font-size:44px;">05</div><div class="moat-t" style="font-size:36px;">Sub-Week Payback</div></div>
+    <div class="card" style="padding:44px;display:flex;flex-direction:column;gap:16px;"><div class="moat-n" style="font-size:44px;">06</div><div class="moat-t" style="font-size:36px;">Marketplace Lock-In</div></div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">16</span></div>
+</div>
+</section>
+
+<!-- 17 ROI Case -->
+<section class="dk" data-label="ROI Case">
+<div class="s sc">
+  <div class="eye" style="margin-bottom:44px;">The ROI Case</div>
+  <div class="flex" style="gap:72px;align-items:center;justify-content:center;">
+    <div style="text-align:center;">
+      <div style="font-size:22px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.4);margin-bottom:14px;">You Pay</div>
+      <div class="bc wh" style="font-size:160px;font-weight:900;line-height:1;">$135</div>
+      <div style="font-size:26px;color:rgba(255,255,255,.45);margin-top:6px;">per user / month</div>
+    </div>
+    <div style="font-size:80px;color:rgba(255,255,255,.15);font-weight:200;">→</div>
+    <div style="text-align:center;">
+      <div style="font-size:22px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.4);margin-bottom:14px;">You Save</div>
+      <div class="bc coral" style="font-size:160px;font-weight:900;line-height:1;">$2,200</div>
+      <div style="font-size:26px;color:rgba(255,255,255,.45);margin-top:6px;">per user / month</div>
+    </div>
+    <div style="font-size:80px;color:rgba(255,255,255,.15);font-weight:200;">=</div>
+    <div style="text-align:center;">
+      <div style="font-size:22px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.4);margin-bottom:14px;">Payback In</div>
+      <div class="bc cyan" style="font-size:160px;font-weight:900;line-height:1;">3</div>
+      <div class="bc cyan" style="font-size:52px;font-weight:700;">DAYS</div>
+      <div style="font-size:20px;color:rgba(255,255,255,.35);margin-top:4px;">not weeks. not months.</div>
+    </div>
+  </div>
+  <div style="font-size:24px;color:rgba(255,255,255,.4);margin-top:44px;max-width:1000px;line-height:1.5;">At $135/user against $2,200 in recaptured payroll, EpicenTra pays for itself in three working days. The ROI case is effectively closed on first contact.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">17</span></div>
+</div>
+</section>
+
+<!-- 18 Section: Market -->
+<section class="bl" data-label="Section Market">
+<div class="s sc">
+  <div style="font-size:24px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);margin-bottom:24px;">Section 04</div>
+  <div class="d wh" style="margin-bottom:20px;">Market</div>
+  <div class="ab" style="margin:0 auto 28px;"></div>
+  <div class="body" style="color:rgba(255,255,255,.6);max-width:960px;">A $320B market growing at 14% a year — and the moment to enter is now.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">18</span></div>
+</div>
+</section>
+
+<!-- 19 Industry -->
+<section class="bl" data-label="Industry">
+<div class="s sc">
+  <div class="eye" style="margin-bottom:36px;">Industry</div>
+  <div class="h1 wh" style="margin-bottom:52px;">A $320B market, growing 14% a year.</div>
+  <div class="flex g3" style="justify-content:center;">
+    <div style="text-align:center;background:rgba(255,255,255,.1);border-radius:18px;padding:44px 56px;">
+      <div class="bc coral" style="font-size:88px;font-weight:900;line-height:1;">$320B</div>
+      <div style="font-size:21px;color:rgba(255,255,255,.55);margin-top:12px;line-height:1.4;">Market Size<br>US Enterprise Software, 2025</div>
+    </div>
+    <div style="text-align:center;background:rgba(255,255,255,.1);border-radius:18px;padding:44px 56px;">
+      <div class="bc cyan" style="font-size:88px;font-weight:900;line-height:1;">14.3%</div>
+      <div style="font-size:21px;color:rgba(255,255,255,.55);margin-top:12px;line-height:1.4;">CAGR<br>2021–2026</div>
+    </div>
+    <div style="text-align:center;background:rgba(255,255,255,.1);border-radius:18px;padding:44px 56px;">
+      <div class="bc coral" style="font-size:88px;font-weight:900;line-height:1;">21.8%</div>
+      <div style="font-size:21px;color:rgba(255,255,255,.55);margin-top:12px;line-height:1.4;">Profit Margins<br>Industry average</div>
+    </div>
+    <div style="text-align:center;background:rgba(255,255,255,.1);border-radius:18px;padding:44px 56px;">
+      <div class="bc cyan" style="font-size:88px;font-weight:900;line-height:1;">34×</div>
+      <div style="font-size:21px;color:rgba(255,255,255,.55);margin-top:12px;line-height:1.4;">Forward P/E<br>High investor confidence</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">19</span></div>
+</div>
+</section>
+
+<!-- 20 Why Now -->
+<section data-label="Why Now">
+<div class="s" style="justify-content:center;">
+  <div class="eye">Why Now</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:32px;">Three forces. One window.</div>
+  <div class="flex col f1" style="gap:20px;">
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="fn" style="font-size:64px;width:64px;flex-shrink:0;">01</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">AI has crossed the reliability threshold.</div>
+    </div>
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="fn" style="font-size:64px;width:64px;flex-shrink:0;">02</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">The experiential category is booming post-COVID.</div>
+    </div>
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="fn" style="font-size:64px;width:64px;flex-shrink:0;">03</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">The mid-market gap is wide open.</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">20</span></div>
+</div>
+</section>
+
+<!-- 21 Target Market -->
+<section data-label="Target Market">
+<div class="s" style="justify-content:center;">
+  <div class="eye">Target Market</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:36px;">Mid-market brands. NYC first.</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:28px;flex:1;align-items:stretch;">
+    <div class="card" style="text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;">
+      <div class="bc coral" style="font-size:120px;font-weight:900;line-height:1;">5K</div>
+      <div style="font-size:28px;color:var(--gray);line-height:1.4;">experiential professionals<br>in NY metro</div>
+    </div>
+    <div class="card" style="text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;">
+      <div class="bc blue" style="font-size:120px;font-weight:900;line-height:1;">12K</div>
+      <div style="font-size:28px;color:var(--gray);line-height:1.4;">organizations that could adopt<br>event-workflow software</div>
+    </div>
+    <div class="card" style="text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;">
+      <div class="bc coral" style="font-size:120px;font-weight:900;line-height:1;">16.5%</div>
+      <div style="font-size:28px;color:var(--gray);line-height:1.4;">projected Year 1<br>market share · NY metro</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">21</span></div>
+</div>
+</section>
+
+<!-- 22 Market Validation -->
+<section class="dk" data-label="Market Validation">
+<div class="s sc" style="padding:100px 160px;">
+  <div class="eye" style="margin-bottom:36px;">Voice of the Market</div>
+  <div style="font-family:'Barlow Condensed',sans-serif;font-size:180px;font-weight:900;color:var(--coral);opacity:.3;line-height:.6;margin-bottom:16px;">"</div>
+  <div style="font-size:50px;font-weight:400;font-style:italic;color:white;max-width:1380px;text-align:center;line-height:1.35;margin-bottom:40px;">Different vendors, different platforms, different logins — we lose half a day every week just reconciling information. If one tool actually solved that, I'd buy it tomorrow.</div>
+  <div style="font-size:22px;color:rgba(255,255,255,.4);">Composite finding from brand activation manager interviews · NYC, 2026</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">22</span></div>
+</div>
+</section>
+
+<!-- 23 Section: GTM -->
+<section class="bl" data-label="Section GTM">
+<div class="s sc">
+  <div style="font-size:24px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);margin-bottom:24px;">Section 05</div>
+  <div class="d wh" style="margin-bottom:20px;">Go-to-Market</div>
+  <div class="ab" style="margin:0 auto 28px;"></div>
+  <div class="body" style="color:rgba(255,255,255,.6);max-width:900px;">Credibility-first. Sales-led. Each activation becomes the next sales call.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">23</span></div>
+</div>
+</section>
+
+<!-- 24 Marketing Strategy -->
+<section data-label="Marketing Strategy">
+<div class="s" style="justify-content:center;">
+  <div class="eye">Marketing Strategy</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:32px;">Credibility-first. Sales-led.</div>
+  <div class="flex col f1" style="gap:20px;">
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="fn" style="font-size:64px;width:64px;flex-shrink:0;">01</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">The Activation List — owned editorial property</div>
+    </div>
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="fn" style="font-size:64px;width:64px;flex-shrink:0;">02</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">Social Content Engine — Instagram, TikTok, LinkedIn</div>
+    </div>
+    <div class="flex f1" style="gap:36px;align-items:center;background:white;border-radius:16px;padding:40px 52px;">
+      <div class="fn" style="font-size:64px;width:64px;flex-shrink:0;">03</div>
+      <div class="bc" style="font-size:44px;font-weight:800;color:var(--navy);">Co-Produced Activations — live product demos</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">24</span></div>
+</div>
+</section>
+
+<!-- 25 Sales Strategy -->
+<section data-label="Sales Strategy">
+<div class="s">
+  <div class="eye">Sales Strategy</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:40px;">Two reps. One pilot. Five stages.</div>
+  <div class="flex g4 f1" style="align-items:stretch;">
+    <div class="flex col g3" style="flex:1;">
+      <div class="card" style="text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;">
+        <div class="bc coral" style="font-size:80px;font-weight:900;line-height:1;">2</div>
+        <div class="bc" style="font-size:32px;font-weight:800;color:var(--navy);">NYC-based sales reps</div>
+        <div style="font-size:24px;color:var(--gray);">$80K base + 5% commission</div>
+      </div>
+      <div class="card" style="text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;">
+        <div class="bc coral" style="font-size:52px;font-weight:900;line-height:1;">&lt;7%</div>
+        <div class="bc" style="font-size:32px;font-weight:800;color:var(--navy);">Target annual churn</div>
+      </div>
+    </div>
+    <div style="flex:2;display:flex;flex-direction:column;gap:16px;">
+      <div class="bc" style="font-size:28px;font-weight:800;color:var(--navy);">Five-Stage Selling Cycle</div>
+      <div style="display:flex;align-items:stretch;border-radius:10px;overflow:hidden;flex:1;">
+        <div style="flex:1;background:var(--blue);color:white;padding:18px 12px;font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;">Awareness</div>
+        <div style="width:0;height:0;border-top:48px solid transparent;border-bottom:48px solid transparent;border-left:20px solid var(--blue);align-self:stretch;min-height:100%;flex-shrink:0;"></div>
+        <div style="flex:1;background:var(--blue-m);color:white;padding:18px 12px;font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;">Consideration</div>
+        <div style="width:0;height:0;border-top:48px solid transparent;border-bottom:48px solid transparent;border-left:20px solid var(--blue-m);align-self:stretch;flex-shrink:0;"></div>
+        <div style="flex:1;background:#5A94E0;color:white;padding:18px 12px;font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;">Decision</div>
+        <div style="width:0;height:0;border-top:48px solid transparent;border-bottom:48px solid transparent;border-left:20px solid #5A94E0;align-self:stretch;flex-shrink:0;"></div>
+        <div style="flex:1;background:var(--cyan);color:var(--navy);padding:18px 12px;font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;">Onboarding</div>
+        <div style="width:0;height:0;border-top:48px solid transparent;border-bottom:48px solid transparent;border-left:20px solid var(--cyan);align-self:stretch;flex-shrink:0;"></div>
+        <div style="flex:1;background:var(--coral);color:white;padding:18px 12px;font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;">Retention</div>
+      </div>
+      <div class="card" style="font-size:28px;color:var(--navy);font-weight:600;">Single-event pilot → full subscription conversion</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">25</span></div>
+</div>
+</section>
+
+<!-- 26 Section: Financials -->
+<section class="bl" data-label="Section Financials">
+<div class="s sc">
+  <div style="font-size:24px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);margin-bottom:24px;">Section 06</div>
+  <div class="d wh" style="margin-bottom:20px;">Financials</div>
+  <div class="ab" style="margin:0 auto 28px;"></div>
+  <div class="body" style="color:rgba(255,255,255,.6);max-width:900px;">High margin. High leverage. Fast breakeven.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">26</span></div>
+</div>
+</section>
+
+<!-- 27 Economic Model -->
+<section data-label="Economic Model">
+<div class="s">
+  <div class="eye">Economic Model</div>
+  <div class="h2" style="margin-top:8px;">High margin. High leverage. Fast breakeven.</div>
+  <div class="econ-grid">
+    <div class="econ-card" style="text-align:center;"><div class="econ-num">80%</div><div class="econ-lbl">Contribution Margin</div></div>
+    <div class="econ-card" style="text-align:center;"><div class="econ-num">$56,985</div><div class="econ-lbl">Monthly Fixed Costs</div></div>
+    <div class="econ-card" style="text-align:center;"><div class="econ-num">487</div><div class="econ-lbl">Users to Break Even</div></div>
+    <div class="econ-card" style="text-align:center;"><div class="econ-num">Dec FY2</div><div class="econ-lbl">Full Payback</div></div>
+  </div>
+  <div style="display:flex;gap:24px;margin-top:24px;flex-shrink:0;">
+    <div style="flex:1;background:rgba(43,92,200,.06);border-radius:10px;padding:24px 32px;font-size:28px;font-weight:600;color:var(--navy);border-left:4px solid var(--coral);">Studio: $135/user · 3–14 users</div>
+    <div style="flex:1;background:rgba(43,92,200,.06);border-radius:10px;padding:24px 32px;font-size:28px;font-weight:600;color:var(--navy);border-left:4px solid var(--blue);">Enterprise: $155/user · 15+ users</div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">27</span></div>
+</div>
+</section>
+
+<!-- 28 Revenue Growth -->
+<section data-label="Revenue Growth">
+<div class="s">
+  <div class="eye">Revenue Growth</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:32px;">10× revenue growth. Profitability by FY2.</div>
+  <div class="gr2 f1" style="gap:52px;">
+    <div class="flex col g3">
+      <div class="card flex col g1"><div class="eye">FY1</div><div class="bc nv" style="font-size:52px;font-weight:900;line-height:1;">$372K</div><div style="font-size:20px;color:var(--gray);">Year 1 launch</div></div>
+      <div class="card flex col g1"><div class="eye">FY2</div><div class="bc nv" style="font-size:52px;font-weight:900;line-height:1;">$2.0M</div><div style="font-size:20px;color:var(--gray);">5× YoY growth · Retained earnings turn positive Q3</div></div>
+      <div style="background:var(--blue);border-radius:14px;padding:28px 32px;display:flex;flex-direction:column;gap:6px;"><div style="font-size:16px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--cyan);">FY5</div><div class="bc wh" style="font-size:52px;font-weight:900;line-height:1;">$3.75M</div><div style="font-size:20px;color:rgba(255,255,255,.6);">31% net margin · $1.18M net profit · $3.66M retained earnings</div></div>
+    </div>
+    <div class="flex col" style="gap:12px;">
+      <div style="flex:1;display:flex;align-items:flex-end;gap:12px;">
+        <div class="bw"><div class="bv">$372K</div><div class="bar" style="background:var(--blue-m);height:44px;"></div><div class="bar-lbl">FY1</div></div>
+        <div class="bw"><div class="bv">$2.0M</div><div class="bar" style="background:var(--blue-m);height:200px;"></div><div class="bar-lbl">FY2</div></div>
+        <div class="bw"><div class="bv">$2.5M</div><div class="bar" style="background:var(--blue-m);height:250px;"></div><div class="bar-lbl">FY3</div></div>
+        <div class="bw"><div class="bv">$3.1M</div><div class="bar" style="background:var(--blue-m);height:310px;"></div><div class="bar-lbl">FY4</div></div>
+        <div class="bw"><div class="bl-bar">$3.75M</div><div class="bar" style="background:var(--coral);height:375px;"></div><div class="bar-lbl" style="color:var(--coral);font-weight:700;">FY5</div></div>
+      </div>
+      <div style="border-top:2px solid var(--border);padding-top:16px;font-size:21px;color:var(--gray);line-height:1.5;"><span style="color:var(--coral);font-weight:700;">→</span> Operating expenses decline as a % of revenue each successive year, improving margin annually.</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">28</span></div>
+</div>
+</section>
+
+<!-- 29 Section: Team -->
+<section class="bl" data-label="Section Team">
+<div class="s sc">
+  <div style="font-size:24px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);margin-bottom:24px;">Section 07</div>
+  <div class="d wh" style="margin-bottom:20px;">The Team</div>
+  <div class="ab" style="margin:0 auto 28px;"></div>
+  <div class="body" style="color:rgba(255,255,255,.6);">Team TACO — built to execute.</div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">29</span></div>
+</div>
+</section>
+
+<!-- 30 Team -->
+<section data-label="Team">
+<div class="s">
+  <div class="eye">Our Team</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:32px;">Team TACO.</div>
+  <div style="display:flex;gap:16px;flex:1;align-items:stretch;">
+    <div style="flex:1;background:white;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
+      <div style="flex:1;background:#EEF3FF;display:flex;align-items:center;justify-content:center;"><svg width="100%" height="100%" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="200" fill="#D4E3F5"/><circle cx="100" cy="72" r="36" fill="#BBCDE0"/><ellipse cx="100" cy="200" rx="72" ry="60" fill="#BBCDE0"/></svg></div>
+      <div style="padding:24px 28px;"><div class="t-role">CEO</div><div class="t-name" style="font-size:30px;">Heath Megnin</div></div>
+    </div>
+    <div style="flex:1;background:white;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
+      <div style="flex:1;background:#EEF3FF;display:flex;align-items:center;justify-content:center;"><svg width="100%" height="100%" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="200" fill="#D4E3F5"/><circle cx="100" cy="72" r="36" fill="#BBCDE0"/><ellipse cx="100" cy="200" rx="72" ry="60" fill="#BBCDE0"/></svg></div>
+      <div style="padding:24px 28px;"><div class="t-role">CFO</div><div class="t-name" style="font-size:30px;">Austin Herlihy</div></div>
+    </div>
+    <div style="flex:1;background:white;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
+      <div style="flex:1;background:#EEF3FF;display:flex;align-items:center;justify-content:center;"><svg width="100%" height="100%" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="200" fill="#D4E3F5"/><circle cx="100" cy="72" r="36" fill="#BBCDE0"/><ellipse cx="100" cy="200" rx="72" ry="60" fill="#BBCDE0"/></svg></div>
+      <div style="padding:24px 28px;"><div class="t-role">COO</div><div class="t-name" style="font-size:30px;">Katie Rogers</div></div>
+    </div>
+    <div style="flex:1;background:white;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
+      <div style="flex:1;background:#EEF3FF;display:flex;align-items:center;justify-content:center;"><svg width="100%" height="100%" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="200" fill="#D4E3F5"/><circle cx="100" cy="72" r="36" fill="#BBCDE0"/><ellipse cx="100" cy="200" rx="72" ry="60" fill="#BBCDE0"/></svg></div>
+      <div style="padding:24px 28px;"><div class="t-role">CTO</div><div class="t-name" style="font-size:30px;">Ryan Madnick</div></div>
+    </div>
+    <div style="flex:1;background:white;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
+      <div style="flex:1;background:#EEF3FF;display:flex;align-items:center;justify-content:center;"><svg width="100%" height="100%" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="200" fill="#D4E3F5"/><circle cx="100" cy="72" r="36" fill="#BBCDE0"/><ellipse cx="100" cy="200" rx="72" ry="60" fill="#BBCDE0"/></svg></div>
+      <div style="padding:24px 28px;"><div class="t-role">CMO</div><div class="t-name" style="font-size:30px;">Margaret Montgomery</div></div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">30</span></div>
+</div>
+</section>
+
+<!-- 31 Advisors -->
+<section data-label="Board of Advisors">
+<div class="s" style="justify-content:center;">
+  <div class="eye">Board of Advisors</div>
+  <div class="h2" style="margin-top:8px;margin-bottom:36px;">Finance. Buyer. Industry.</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:28px;flex:1;align-items:stretch;">
+    <div style="background:white;border-radius:14px;padding:52px 48px;display:flex;flex-direction:column;gap:20px;">
+      <div class="adv-t" style="font-size:18px;">Financial</div>
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:44px;font-weight:800;color:var(--navy);">Julia Ford</div>
+      <div style="font-size:26px;color:var(--gray);line-height:1.4;">Lead Income Analyst<br>GE Vernova · prior Klaviyo</div>
+    </div>
+    <div style="background:white;border-radius:14px;padding:52px 48px;display:flex;flex-direction:column;gap:20px;">
+      <div class="adv-t" style="font-size:18px;">Buyer</div>
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:36px;font-weight:800;color:var(--navy);line-height:1.15;">Adrianna Carello Leites</div>
+      <div style="font-size:26px;color:var(--gray);line-height:1.4;">Senior Marketing Manager<br>Rothy's · Syracuse alumna</div>
+    </div>
+    <div style="background:white;border-radius:14px;padding:52px 48px;display:flex;flex-direction:column;gap:20px;">
+      <div class="adv-t" style="font-size:18px;">Industry</div>
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:44px;font-weight:800;color:var(--navy);">Amy Feiman</div>
+      <div style="font-size:26px;color:var(--gray);line-height:1.4;">Founder &amp; Creative Principal<br>House Fourteen</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">31</span></div>
+</div>
+</section>
+
+<!-- 32 The Ask -->
+<section class="dk" data-label="The Ask">
+<div class="s">
+  <div class="eye" style="margin-bottom:28px;">The Ask</div>
+  <div class="gr2 f1" style="gap:52px;align-items:start;">
+    <div>
+      <div class="bc coral" style="font-size:120px;font-weight:900;line-height:1;">$300K</div>
+      <div class="bc wh" style="font-size:40px;font-weight:700;margin-top:6px;">for 25% equity</div>
+      <div style="font-size:22px;color:rgba(255,255,255,.5);margin-top:12px;line-height:1.5;">1,667,149 shares of preferred stock<br>Founding team contributes $100K · Total capitalization: $400K</div>
+      <div style="margin-top:28px;">
+        <div style="font-size:17px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--cyan);margin-bottom:12px;">Use of Funds</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;justify-content:space-between;font-size:24px;padding:12px 18px;background:rgba(255,255,255,.07);border-radius:8px;"><span style="color:rgba(255,255,255,.7);">Marketing</span><span class="coral bc" style="font-weight:700;">$90K</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:24px;padding:12px 18px;background:rgba(255,255,255,.07);border-radius:8px;"><span style="color:rgba(255,255,255,.7);">Software Development</span><span class="coral bc" style="font-weight:700;">$85K</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:24px;padding:12px 18px;background:rgba(255,255,255,.07);border-radius:8px;"><span style="color:rgba(255,255,255,.7);">Sales Staff</span><span class="coral bc" style="font-weight:700;">$55K</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:24px;padding:12px 18px;background:rgba(255,255,255,.07);border-radius:8px;"><span style="color:rgba(255,255,255,.7);">Other Startup Costs</span><span class="coral bc" style="font-weight:700;">$70K</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="flex col g3">
+      <div style="background:rgba(255,255,255,.08);border-radius:14px;padding:36px 40px;">
+        <div style="font-size:16px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--cyan);margin-bottom:14px;">Investor Terms</div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div style="font-size:23px;color:rgba(255,255,255,.75);line-height:1.4;">→ One board seat with full financial & quarterly reporting access</div>
+          <div style="font-size:23px;color:rgba(255,255,255,.75);line-height:1.4;">→ Right to participate in strategic discussions & receive material business updates</div>
+        </div>
+      </div>
+      <div style="background:rgba(244,123,90,.15);border-radius:14px;padding:36px 40px;border:2px solid rgba(244,123,90,.3);">
+        <div style="font-size:16px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--coral);margin-bottom:14px;">Projected Return</div>
+        <div class="bc coral" style="font-size:88px;font-weight:900;line-height:1;">10×</div>
+        <div style="font-size:22px;color:rgba(255,255,255,.6);margin-top:8px;line-height:1.4;">Targeted investor return via strategic acquisition by an established MarTech or enterprise software platform within 5 years.</div>
+      </div>
+      <div style="background:rgba(255,255,255,.06);border-radius:14px;padding:28px 32px;">
+        <div style="font-size:20px;color:rgba(255,255,255,.4);text-align:center;">DCF Valuation at 44% risk-adjusted discount rate</div>
+        <div class="bc wh" style="font-size:40px;font-weight:800;text-align:center;margin-top:4px;">$1,199,739</div>
+      </div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">32</span></div>
+</div>
+</section>
+
+<!-- 33 Thank You -->
+<section class="dk" data-label="Thank You">
+<div class="s sc">
+  <div style="width:120px;margin-bottom:28px;"><svg width="80" height="93" viewBox="0 0 520 581" fill="none" xmlns="http://www.w3.org/2000/svg" style="mix-blend-mode:screen">
+<rect width="520" height="581" fill="white"/>
+<path d="M0 181C0 114.726 53.7258 61 120 61H400V61C400 127.274 346.274 181 280 181H0V181Z" fill="#1565C0" fill-opacity="0.8"/>
+<path d="M180 521C113.726 521 60 467.274 60 401L60 121C126.274 121 180 174.726 180 241V521Z" fill="#7CE1FB" fill-opacity="0.8"/>
+<path d="M120 461C120 394.726 173.726 341 240 341H520C520 407.274 466.274 461 400 461H120Z" fill="#5BC5F2" fill-opacity="0.8"/>
+<path d="M460 401C393.726 401 340 347.274 340 281V0C406.274 0 460 53.7258 460 120V401Z" fill="#2089E1" fill-opacity="0.8"/>
+<rect x="335" y="61" width="5" height="120" fill="#F5F5F5"/>
+<rect x="180" y="341" width="5" height="120" fill="#F5F5F5"/>
+<rect x="60" y="186" width="5" height="120" transform="rotate(-90 60 186)" fill="#F5F5F5"/>
+<rect x="340" y="341" width="5" height="120" transform="rotate(-90 340 341)" fill="#F5F5F5"/>
+</svg></div>
+  <div class="bc wh" style="font-size:88px;font-weight:900;letter-spacing:.08em;">EPICEN<span class="coral">TRA</span></div>
+  <div style="width:64px;height:4px;background:var(--coral);border-radius:2px;margin:20px auto 32px;"></div>
+  <div class="bc" style="font-size:48px;font-weight:700;color:rgba(255,255,255,.6);margin-bottom:48px;">Questions?</div>
+  <div style="font-size:22px;color:rgba(255,255,255,.3);letter-spacing:.08em;">Team TACO · Whitman Capstone · April 2026 · epicentra.io</div>
+</div>
+</section>
+
+<!-- 34 Appendix -->
+<section data-label="Appendix">
+<div class="s sc">
+  <div class="eye" style="margin-bottom:20px;">Appendix</div>
+  <div class="h1" style="margin-bottom:40px;">Supporting Materials</div>
+  <div class="gr3" style="width:100%;">
+    <div class="card" style="text-align:left;border-left:4px solid var(--blue);">
+      <div class="bc" style="font-size:26px;font-weight:800;color:var(--navy);margin-bottom:10px;">Web Command Center</div>
+      <div style="font-size:20px;color:var(--gray);line-height:1.4;">Synchronized desktop hub. Smart Itineraries sync instantly across all connected users. Single source of truth for run-of-show, vendor contracts, team assignments, and budget tracking.</div>
+    </div>
+    <div class="card" style="text-align:left;border-left:4px solid var(--coral);">
+      <div class="bc" style="font-size:26px;font-weight:800;color:var(--navy);margin-bottom:10px;">AI Agent</div>
+      <div style="font-size:20px;color:var(--gray);line-height:1.4;">Proactive intelligence that executes — not just assists. Planning Agent drafts timelines; Execution Agent handles vendor outreach and compliance chasing unattended.</div>
+    </div>
+    <div class="card" style="text-align:left;border-left:4px solid var(--cyan);">
+      <div class="bc" style="font-size:26px;font-weight:800;color:var(--navy);margin-bottom:10px;">Field Mobile App</div>
+      <div style="font-size:20px;color:var(--gray);line-height:1.4;">Lightweight iOS and Android tool. Geo-fenced check-ins, digital waiver signing, and personalized day-sheets. Real-time sync to Command Center — no manual status reports required.</div>
+    </div>
+  </div>
+  <div class="ft"><span class="ft-brand">EPICENTRA</span><span class="ft-pg">34</span></div>
+</div>
+</section>
+
+</deck-stage>
+
+<!-- Tweaks -->
+<style>
+#tw{display:none;position:fixed;bottom:72px;right:24px;background:white;border-radius:14px;padding:24px 28px;box-shadow:0 8px 40px rgba(0,0,0,.15);z-index:9999;width:300px;font-family:'DM Sans',sans-serif;}
+#tw h3{font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:800;color:var(--navy);margin-bottom:18px;letter-spacing:.04em;}
+.tr{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;font-size:15px;color:var(--gray);}
+.tr input[type=color]{width:36px;height:28px;border:none;border-radius:6px;cursor:pointer;}
+.tr select{font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);}
+</style>
+<div id="tw">
+  <h3>Tweaks</h3>
+  <div class="tr"><label>Accent (coral)</label><input type="color" id="tw-coral" value="#F47B5A"></div>
+  <div class="tr"><label>Primary blue</label><input type="color" id="tw-blue" value="#2B5CC8"></div>
+  <div class="tr"><label>Light bg</label>
+    <select id="tw-bg"><option value="#F7F8FC">Off-white (default)</option><option value="#FFFFFF">Pure white</option><option value="#F0F4FF">Cool blue-white</option></select>
+  </div>
+</div>
+<script>
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "coral": "#F47B5A",
+  "blue": "#2B5CC8",
+  "bg": "#F7F8FC"
+}/*EDITMODE-END*/;
+function applyTweaks(t){
+  document.documentElement.style.setProperty('--coral',t.coral);
+  document.documentElement.style.setProperty('--blue',t.blue);
+  document.querySelectorAll('section:not(.dk):not(.bl)').forEach(s=>s.style.background=t.bg);
+  document.querySelector('#tw-coral').value=t.coral;
+  document.querySelector('#tw-blue').value=t.blue;
+  document.querySelector('#tw-bg').value=t.bg;
+}
+applyTweaks(TWEAK_DEFAULTS);
+document.getElementById('tw-coral').addEventListener('input',e=>{
+  document.documentElement.style.setProperty('--coral',e.target.value);
+  window.parent.postMessage({type:'__edit_mode_set_keys',edits:{coral:e.target.value}},'*');
+});
+document.getElementById('tw-blue').addEventListener('input',e=>{
+  document.documentElement.style.setProperty('--blue',e.target.value);
+  window.parent.postMessage({type:'__edit_mode_set_keys',edits:{blue:e.target.value}},'*');
+});
+document.getElementById('tw-bg').addEventListener('change',e=>{
+  document.querySelectorAll('section:not(.dk):not(.bl)').forEach(s=>s.style.background=e.target.value);
+  window.parent.postMessage({type:'__edit_mode_set_keys',edits:{bg:e.target.value}},'*');
+});
+window.addEventListener('message',e=>{
+  if(e.data?.type==='__activate_edit_mode') document.getElementById('tw').style.display='block';
+  if(e.data?.type==='__deactivate_edit_mode') document.getElementById('tw').style.display='none';
+});
+window.parent.postMessage({type:'__edit_mode_available'},'*');
+</script>
+</body>
+</html>

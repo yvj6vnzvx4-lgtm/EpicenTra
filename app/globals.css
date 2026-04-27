@@ -3,25 +3,122 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #F7F8FC;
+  --foreground: #0D1B3E;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2D3E73; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4A7FD4; }
+
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
+  .text-balance { text-wrap: balance; }
+
+  /* Brand gradient text */
+  .text-gradient-blue {
+    background: linear-gradient(135deg, #2B5CC8, #7DD3F0);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .text-gradient-coral {
+    background: linear-gradient(135deg, #F47B5A, #2B5CC8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Brand glow effects */
+  .glow-blue  { box-shadow: 0 0 20px rgba(43,92,200,0.30), 0 0 40px rgba(43,92,200,0.12); }
+  .glow-cyan  { box-shadow: 0 0 20px rgba(125,211,240,0.30), 0 0 40px rgba(125,211,240,0.12); }
+  .glow-coral { box-shadow: 0 0 20px rgba(244,123,90,0.30), 0 0 40px rgba(244,123,90,0.12); }
+  .glow-green { box-shadow: 0 0 20px rgba(16,185,129,0.25), 0 0 40px rgba(16,185,129,0.1); }
+  .glow-amber { box-shadow: 0 0 20px rgba(245,158,11,0.25), 0 0 40px rgba(245,158,11,0.1); }
+
+  /* Glass card */
+  .glass {
+    background: rgba(255,255,255,0.03);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  /* Brand navy mesh background */
+  .mesh-blue {
+    background:
+      radial-gradient(ellipse 60% 50% at 20% 40%, rgba(43,92,200,0.18) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 60% at 80% 30%, rgba(125,211,240,0.12) 0%, transparent 70%),
+      radial-gradient(ellipse 40% 40% at 60% 80%, rgba(244,123,90,0.08) 0%, transparent 70%),
+      #0D1B3E;
+  }
+
+  .workflow-panel {
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.88) 100%);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .workflow-sheen {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .workflow-sheen::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    height: 110px;
+    background: linear-gradient(90deg, rgba(43,92,200,0.12), rgba(74,127,212,0.10), rgba(244,123,90,0.08));
+    pointer-events: none;
+  }
+
+  /* Shimmer loading */
+  .shimmer-bg {
+    background: linear-gradient(90deg, #132347 25%, #233160 50%, #132347 75%);
+    background-size: 200% 100%;
+    animation: shimmer 2.5s linear infinite;
+  }
+
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Left-border callout accents (brand spec) */
+  .callout-coral { border-left: 3px solid #F47B5A; }
+  .callout-blue  { border-left: 3px solid #2B5CC8; }
+  .callout-cyan  { border-left: 3px solid #7DD3F0; }
+}
+
+@layer components {
+  .input-base {
+    @apply w-full px-3 py-2 rounded-lg text-sm bg-white border border-[#DDDDDD] text-[#0D1B3E] placeholder:text-[#6B7A99] focus:outline-none focus:ring-2 focus:ring-brand-blue focus:border-transparent transition-all hover:border-[#4A7FD4];
+  }
+  .table-input {
+    @apply px-2 py-1 rounded text-sm bg-transparent border border-transparent text-[#0D1B3E] placeholder:text-[#6B7A99] focus:outline-none focus:ring-1 focus:ring-brand-blue focus:border-transparent focus:bg-white transition-all hover:border-[#DDDDDD] hover:bg-[#F7F8FC];
+  }
+  .studio-input {
+    @apply w-full rounded-2xl border border-white/10 px-4 py-3 text-sm text-white placeholder:text-[#6B7A99] outline-none transition-all hover:border-white/20 focus:border-brand-cyan focus:ring-2 focus:ring-brand-cyan/30;
+    background: rgba(255, 255, 255, 0.08);
   }
 }
