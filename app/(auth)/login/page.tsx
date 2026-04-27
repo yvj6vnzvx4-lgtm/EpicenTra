@@ -262,7 +262,7 @@ export default function LoginPage() {
             </p>
             <div className="space-y-1.5">
               {[
-                { email: "sarah@acme.com", role: "Director" },
+                { email: "melissa@acme.com", role: "Director" },
                 { email: "james@acme.com", role: "Manager" },
                 { email: "alex@acme.com", role: "Coordinator" },
               ].map(({ email: demoEmail, role }) => (

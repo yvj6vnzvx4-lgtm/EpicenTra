@@ -67,6 +67,7 @@ export const authOptions: NextAuthOptions = {
             avatarUrl: user.avatarUrl,
             organizationId: user.organizationId,
             organizationName: user.organization.name,
+            organizationSlug: user.organization.slug,
           };
         } catch (error) {
           console.error("[auth] credentials authorize failed:", error);
@@ -89,6 +90,7 @@ export const authOptions: NextAuthOptions = {
         token.avatarUrl = u.avatarUrl;
         token.organizationId = u.organizationId;
         token.organizationName = u.organizationName;
+        token.organizationSlug = (u as any).organizationSlug;
       }
       return token;
     },
@@ -99,6 +101,7 @@ export const authOptions: NextAuthOptions = {
         session.user.avatarUrl = token.avatarUrl as string | null;
         session.user.organizationId = token.organizationId as string;
         session.user.organizationName = token.organizationName as string;
+        session.user.organizationSlug = token.organizationSlug as string;
       }
       return session;
     },

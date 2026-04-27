@@ -11,6 +11,7 @@ declare module "next-auth" {
       avatarUrl: string | null;
       organizationId: string;
       organizationName: string;
+      organizationSlug: string;
     };
   }
 }
@@ -22,5 +23,6 @@ declare module "next-auth/jwt" {
     avatarUrl: string | null;
     organizationId: string;
     organizationName: string;
+    organizationSlug: string;
   }
 }
