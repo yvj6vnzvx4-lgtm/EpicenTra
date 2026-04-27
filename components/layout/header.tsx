@@ -73,7 +73,7 @@ export function Header({ onMenuClick }: HeaderProps) {
             <span key={crumb.href} className="flex items-center gap-1.5">
               {i > 0 && <span className="text-slate-300">/</span>}
               {crumb.isLast ? (
-                <span className="font-semibold text-slate-200 truncate max-w-[160px] sm:max-w-none">
+                <span className="font-semibold text-slate-200 truncate max-w-[200px] sm:max-w-none">
                   {crumb.label}
                 </span>
               ) : (
@@ -97,7 +97,7 @@ export function Header({ onMenuClick }: HeaderProps) {
         >
           <Search className="w-3 h-3" />
           Search
-          <kbd className="ml-1 text-[10px] bg-slate-100 px-1 rounded">⌘K</kbd>
+          <kbd className="ml-1 text-[10px] bg-white/10 text-slate-400 px-1 rounded">⌘K</kbd>
         </button>
 
         {/* Notification bell */}

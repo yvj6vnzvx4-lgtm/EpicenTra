@@ -45,19 +45,19 @@ export default async function DashboardPage() {
         }
       />
 
-      <div className="rounded-[24px] border border-[#2B5CC8]/20 bg-[#EEF3FF] px-5 py-4">
+      <div className="rounded-[24px] border border-brand-blue/25 bg-brand-blue/10 px-5 py-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#2B5CC8]/10 text-[#2B5CC8]">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-blue/20 text-brand-cyan">
               <Sparkles className="h-4 w-4" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-[#0D1B3E]">Strategy Studio</p>
+              <p className="text-sm font-semibold text-white">Strategy Studio</p>
               <p className="text-sm text-[#6B7A99]">Briefs, audience, and activation chat</p>
             </div>
           </div>
-          <Link href="/strategy">
-            <Button variant="secondary">
+          <Link href="/strategy" className="shrink-0">
+            <Button variant="secondary" size="sm">
               Open Strategy Studio
               <ArrowRight className="w-4 h-4" />
             </Button>
@@ -117,7 +117,7 @@ export default async function DashboardPage() {
           </Link>
         </div>
       ) : (
-        <div className="flex gap-6">
+        <div className="flex flex-col lg:flex-row gap-6">
           {/* Events grid */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-4">
@@ -137,7 +137,7 @@ export default async function DashboardPage() {
           </div>
 
           {/* Deadlines sidebar */}
-          <div className="w-72 shrink-0">
+          <div className="w-full lg:w-72 lg:shrink-0">
             <UpcomingDeadlines deadlines={deadlines} />
           </div>
         </div>

@@ -22,7 +22,7 @@ export function StatCard({ label, value, icon: Icon, gradient, glow, sub }: Stat
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-2xl p-5 flex items-center gap-4 transition-all duration-300 cursor-default",
+        "group relative overflow-hidden rounded-2xl p-4 sm:p-5 flex items-center gap-3 sm:gap-4 transition-all duration-300 cursor-default",
         "bg-navy-800 border border-white/[0.06]",
         "hover:scale-[1.02]"
       )}
@@ -36,17 +36,17 @@ export function StatCard({ label, value, icon: Icon, gradient, glow, sub }: Stat
 
       {/* Icon */}
       <div className={cn(
-        "relative w-11 h-11 rounded-xl flex items-center justify-center shrink-0 bg-gradient-to-br",
+        "relative w-9 h-9 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center shrink-0 bg-gradient-to-br",
         gradient
       )}>
-        <Icon className="w-5 h-5 text-white" />
+        <Icon className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
       </div>
 
       {/* Text */}
-      <div className="relative">
-        <p className="font-display font-black text-2xl text-white leading-tight tracking-wide">{value}</p>
-        <p className="text-xs text-[#6B7A99] mt-0.5 font-medium">{label}</p>
-        {sub && <p className="text-xs text-[#6B7A99]/70 mt-0.5">{sub}</p>}
+      <div className="relative min-w-0">
+        <p className="font-display font-black text-xl sm:text-2xl text-white leading-tight tracking-wide truncate">{value}</p>
+        <p className="text-xs text-[#6B7A99] mt-0.5 font-medium leading-tight">{label}</p>
+        {sub && <p className="text-xs text-[#6B7A99]/70 mt-0.5 hidden sm:block">{sub}</p>}
       </div>
     </div>
   );
