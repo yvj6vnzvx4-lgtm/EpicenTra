@@ -118,9 +118,8 @@ export default function LoginPage() {
                 height: dot.size,
                 borderRadius: "50%",
                 backgroundColor: dot.color,
-                animation: `dotRise ${dot.duration}ms ease-out ${dot.delay}ms forwards`,
-                opacity: 0,
-                boxShadow: `0 0 6px ${dot.color}99`,
+                animation: `dotRise ${dot.duration}ms ease-out ${dot.delay}ms both`,
+                boxShadow: `0 0 8px ${dot.color}`,
               }}
             />
           ))}
@@ -132,8 +131,6 @@ export default function LoginPage() {
               transition: "opacity 1000ms ease-out, filter 800ms ease-out",
               opacity: revealed ? 0 : 1,
               filter: revealed ? "blur(4px)" : "none",
-              position: "relative",
-              zIndex: 1,
             }}
           />
         </div>
