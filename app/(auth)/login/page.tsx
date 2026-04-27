@@ -27,15 +27,15 @@ function generateDots(count: number): Dot[] {
     id: i,
     x: 10 + Math.random() * 80,
     y: 15 + Math.random() * 70,
-    size: 4 + Math.random() * 7,
+    size: 5 + Math.random() * 7,
     color: DOT_COLORS[Math.floor(Math.random() * DOT_COLORS.length)],
-    delay: Math.random() * 900,
-    duration: 1400 + Math.random() * 800,
+    delay: Math.random() * 600,
+    duration: 1200 + Math.random() * 600,
   }));
 }
 
-const BrandMark = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 520 521" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+const BrandMark = ({ className, style }: { className?: string; style?: React.CSSProperties }) => (
+  <svg viewBox="0 0 520 521" className={className} style={style} fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M0 181C0 114.726 53.7258 61 120 61H400V61C400 127.274 346.274 181 280 181H0V181Z" fill="#1565C0" fillOpacity="0.9"/>
     <path d="M180 521C113.726 521 60 467.274 60 401L60 121C126.274 121 180 174.726 180 241V521Z" fill="#7CE1FB" fillOpacity="0.9"/>
     <path d="M120 461C120 394.726 173.726 341 240 341H520C520 407.274 466.274 461 400 461H120Z" fill="#5BC5F2" fillOpacity="0.9"/>
@@ -54,6 +54,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const [dots] = useState<Dot[]>(() => generateDots(28));
   const hasRevealed = useRef(false);
 
@@ -78,11 +79,17 @@ export default function LoginPage() {
 
       if (result?.error === AUTH_UNAVAILABLE_ERROR) {
         setError("Login is temporarily unavailable. Please try again.");
+        setLoading(false);
       } else if (result?.error) {
         setError("Invalid email or password.");
+        setLoading(false);
       } else {
-        router.push("/dashboard");
-        router.refresh();
+        // Trigger bubble-up animation, then navigate
+        setSigningIn(true);
+        setTimeout(() => {
+          router.push("/dashboard");
+          router.refresh();
+        }, 1400);
       }
     } catch (err) {
       setError(
@@ -90,7 +97,6 @@ export default function LoginPage() {
           ? "Login is temporarily unavailable. Please try again."
           : "Login failed. Please try again."
       );
-    } finally {
       setLoading(false);
     }
   }
@@ -103,18 +109,17 @@ export default function LoginPage() {
         className="flex flex-col items-center cursor-default select-none"
         onMouseEnter={handleHover}
       >
-        {/* Logo mark — shrinks in place, does NOT disappear */}
+        {/* Logo mark — stays full size on hover, bubbles up on sign-in */}
         <div
           style={{
             position: "relative",
             overflow: "visible",
-            transition: "width 1300ms ease-out, height 1300ms ease-out",
-            width: revealed ? 52 : 96,
-            height: revealed ? 52 : 96,
+            width: 96,
+            height: 96,
           }}
         >
-          {/* Dots burst out of the logo and float upward */}
-          {revealed && dots.map((dot) => (
+          {/* Dots — only on sign-in */}
+          {signingIn && dots.map((dot) => (
             <span
               key={dot.id}
               style={{
@@ -131,16 +136,25 @@ export default function LoginPage() {
             />
           ))}
 
-          <BrandMark className="w-full h-full" />
+          {/* Logo — fades out on sign-in */}
+          <BrandMark
+            className="w-full h-full"
+            style={{
+              transition: "opacity 900ms ease-out, filter 900ms ease-out",
+              opacity: signingIn ? 0 : 1,
+              filter: signingIn ? "blur(6px)" : "none",
+            }}
+          />
         </div>
 
-        {/* Wordmark — transitions slowly */}
+        {/* Wordmark */}
         <p
-          className="font-display font-black uppercase tracking-[0.08em] text-white"
+          className="font-display font-black uppercase tracking-[0.08em] text-white mt-4"
           style={{
-            transition: "font-size 1600ms ease-out, margin-top 1300ms ease-out",
-            fontSize: revealed ? "1.125rem" : "3rem",
-            marginTop: revealed ? "0.5rem" : "1rem",
+            fontSize: revealed ? "1.5rem" : "3rem",
+            transition: "font-size 1400ms ease-out, opacity 900ms ease-out, margin-top 1400ms ease-out",
+            marginTop: revealed ? "0.75rem" : "1rem",
+            opacity: signingIn ? 0 : 1,
           }}
         >
           EpicenTra
@@ -150,16 +164,16 @@ export default function LoginPage() {
         <p
           className="text-brand-coral font-semibold tracking-widest uppercase"
           style={{
-            transition: "font-size 1400ms ease-out, opacity 1200ms ease-out, margin-top 1400ms ease-out",
-            fontSize: revealed ? "0.6rem" : "0.75rem",
-            marginTop: revealed ? "0.15rem" : "0.5rem",
-            opacity: revealed ? 0.4 : 1,
+            transition: "font-size 1400ms ease-out, opacity 900ms ease-out, margin-top 1400ms ease-out",
+            fontSize: revealed ? "0.65rem" : "0.75rem",
+            marginTop: revealed ? "0.2rem" : "0.5rem",
+            opacity: signingIn ? 0 : revealed ? 0.5 : 1,
           }}
         >
           Plan Smarter. Launch Faster. Events Redefined.
         </p>
 
-        {/* Hover hint — fades and collapses before card appears */}
+        {/* Hover hint */}
         <div
           style={{
             transition: "opacity 700ms ease-out, max-height 800ms ease-out, margin-top 800ms ease-out",
@@ -178,17 +192,17 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Login card — reveals below the logo after hover */}
+      {/* Login card */}
       <div
         className="w-full max-w-sm"
         style={{
-          transition: "opacity 1100ms ease-out 500ms, transform 1200ms ease-out 500ms, max-height 1200ms ease-out 300ms, margin-top 1200ms ease-out 300ms",
-          opacity: revealed ? 1 : 0,
+          transition: "opacity 1100ms ease-out 400ms, transform 1200ms ease-out 400ms, max-height 1200ms ease-out 200ms, margin-top 1200ms ease-out 200ms",
+          opacity: signingIn ? 0 : revealed ? 1 : 0,
           transform: revealed ? "translateY(0)" : "translateY(30px)",
           maxHeight: revealed ? "700px" : "0px",
           marginTop: revealed ? "2rem" : 0,
           overflow: "hidden",
-          pointerEvents: revealed ? "auto" : "none",
+          pointerEvents: revealed && !signingIn ? "auto" : "none",
         }}
       >
         <div className="bg-navy-800 rounded-2xl border border-navy-700 p-8 shadow-2xl">
