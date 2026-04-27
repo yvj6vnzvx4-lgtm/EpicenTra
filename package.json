@@ -6,7 +6,7 @@
     "dev": "concurrently \"next dev\" \"ts-node --compiler-options '{\\\"module\\\":\\\"CommonJS\\\",\\\"target\\\":\\\"ES2015\\\"}' server/index.ts\"",
     "dev:web": "next dev",
     "dev:socket": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' server/index.ts",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
     "db:migrate": "prisma migrate dev",
