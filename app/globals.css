@@ -103,6 +103,16 @@ body {
   .hide-scrollbar::-webkit-scrollbar {
     display: none;
   }
+}
+
+/* Logo dissolve dot animation */
+@keyframes dotRise {
+  0%   { opacity: 0;   transform: translateY(0px)   scale(0.4); }
+  15%  { opacity: 1;   transform: translateY(-12px)  scale(1);   }
+  100% { opacity: 0;   transform: translateY(-80px)  scale(0.6); }
+}
+
+@layer utilities {
 
   /* Left-border callout accents (brand spec) */
   .callout-coral { border-left: 3px solid #F47B5A; }

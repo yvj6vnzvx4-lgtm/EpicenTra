@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
@@ -10,8 +10,32 @@ import { ChevronDown } from "lucide-react";
 const LOGIN_TIMEOUT_MS = 6000;
 const AUTH_UNAVAILABLE_ERROR = "AUTH_SERVICE_UNAVAILABLE";
 
-const BrandMark = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 520 521" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+const DOT_COLORS = ["#1565C0", "#2089E1", "#5BC5F2", "#7CE1FB", "#4A7FD4", "#7DD3F0"];
+
+type Dot = {
+  id: number;
+  x: number;
+  y: number;
+  size: number;
+  color: string;
+  delay: number;
+  duration: number;
+};
+
+function generateDots(count: number): Dot[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: i,
+    x: 10 + Math.random() * 80,
+    y: 15 + Math.random() * 70,
+    size: 4 + Math.random() * 7,
+    color: DOT_COLORS[Math.floor(Math.random() * DOT_COLORS.length)],
+    delay: Math.random() * 900,
+    duration: 1400 + Math.random() * 800,
+  }));
+}
+
+const BrandMark = ({ className, style }: { className?: string; style?: React.CSSProperties }) => (
+  <svg viewBox="0 0 520 521" className={className} style={style} fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M0 181C0 114.726 53.7258 61 120 61H400V61C400 127.274 346.274 181 280 181H0V181Z" fill="#1565C0" fillOpacity="0.9"/>
     <path d="M180 521C113.726 521 60 467.274 60 401L60 121C126.274 121 180 174.726 180 241V521Z" fill="#7CE1FB" fillOpacity="0.9"/>
     <path d="M120 461C120 394.726 173.726 341 240 341H520C520 407.274 466.274 461 400 461H120Z" fill="#5BC5F2" fillOpacity="0.9"/>
@@ -30,6 +54,14 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  const [dots] = useState<Dot[]>(() => generateDots(28));
+  const hasRevealed = useRef(false);
+
+  function handleHover() {
+    if (hasRevealed.current) return;
+    hasRevealed.current = true;
+    setRevealed(true);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -69,42 +101,81 @@ export default function LoginPage() {
       {/* Hero — hover trigger */}
       <div
         className="flex flex-col items-center cursor-default select-none"
-        onMouseEnter={() => setRevealed(true)}
+        onMouseEnter={handleHover}
       >
-        {/* Logo mark — large before reveal, smaller after */}
-        <div
-          className={`transition-all duration-700 ease-out ${
-            revealed
-              ? "w-16 h-16 drop-shadow-none"
-              : "w-24 h-24 drop-shadow-[0_0_32px_rgba(43,92,200,0.5)] animate-glow-pulse"
-          }`}
-        >
-          <BrandMark className="w-full h-full" />
+        {/* Logo container — relative so dots can be positioned inside */}
+        <div className="relative flex items-center justify-center" style={{ width: 128, height: 128 }}>
+
+          {/* Dots — only visible after hover, each floats up independently */}
+          {revealed && dots.map((dot) => (
+            <span
+              key={dot.id}
+              style={{
+                position: "absolute",
+                left: `${dot.x}%`,
+                top: `${dot.y}%`,
+                width: dot.size,
+                height: dot.size,
+                borderRadius: "50%",
+                backgroundColor: dot.color,
+                animation: `dotRise ${dot.duration}ms ease-out ${dot.delay}ms forwards`,
+                opacity: 0,
+                boxShadow: `0 0 6px ${dot.color}99`,
+              }}
+            />
+          ))}
+
+          {/* Logo SVG — fades out on reveal */}
+          <BrandMark
+            className="w-full h-full"
+            style={{
+              transition: "opacity 1000ms ease-out, filter 800ms ease-out",
+              opacity: revealed ? 0 : 1,
+              filter: revealed ? "blur(4px)" : "none",
+              position: "relative",
+              zIndex: 1,
+            }}
+          />
         </div>
 
         {/* Wordmark */}
         <p
-          className={`font-display font-black uppercase tracking-[0.08em] text-white transition-all duration-700 ease-out mt-4 ${
-            revealed ? "text-2xl" : "text-5xl"
-          }`}
+          className="font-display font-black uppercase tracking-[0.08em] text-white mt-4"
+          style={{
+            transition: "font-size 1100ms ease-out, opacity 1000ms ease-out",
+            fontSize: revealed ? "1.5rem" : "3rem",
+            opacity: revealed ? 0.7 : 1,
+          }}
         >
           EpicenTra
         </p>
 
         {/* Tagline */}
         <p
-          className={`text-brand-coral font-semibold tracking-widest uppercase transition-all duration-500 ${
-            revealed ? "text-[10px] mt-1 opacity-60" : "text-xs mt-2 opacity-100"
-          }`}
+          className="text-brand-coral font-semibold tracking-widest uppercase"
+          style={{
+            transition: "font-size 1000ms ease-out, opacity 900ms ease-out, margin-top 1000ms ease-out",
+            fontSize: revealed ? "0.625rem" : "0.75rem",
+            marginTop: revealed ? "0.25rem" : "0.5rem",
+            opacity: revealed ? 0.4 : 1,
+          }}
         >
           Plan Smarter. Launch Faster. Events Redefined.
         </p>
 
         {/* Hover hint — fades out after reveal */}
         <div
-          className={`flex flex-col items-center mt-6 transition-all duration-500 ${
-            revealed ? "opacity-0 pointer-events-none h-0 mt-0 overflow-hidden" : "opacity-100"
-          }`}
+          style={{
+            transition: "opacity 600ms ease-out, height 700ms ease-out, margin-top 700ms ease-out",
+            opacity: revealed ? 0 : 1,
+            height: revealed ? 0 : "auto",
+            marginTop: revealed ? 0 : "1.5rem",
+            pointerEvents: revealed ? "none" : "auto",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+          }}
         >
           <p className="text-[11px] text-[#6B7A99] uppercase tracking-[0.2em]">hover to enter</p>
           <ChevronDown className="w-4 h-4 text-[#6B7A99] mt-1 animate-bounce" />
@@ -113,11 +184,16 @@ export default function LoginPage() {
 
       {/* Login card — slides up on reveal */}
       <div
-        className={`w-full max-w-sm transition-all duration-700 ease-out ${
-          revealed
-            ? "opacity-100 translate-y-0 mt-8"
-            : "opacity-0 translate-y-10 pointer-events-none mt-0 h-0 overflow-hidden"
-        }`}
+        className="w-full max-w-sm"
+        style={{
+          transition: "opacity 1200ms ease-out 300ms, transform 1200ms ease-out 300ms, margin-top 1200ms ease-out 300ms, height 1000ms ease-out",
+          opacity: revealed ? 1 : 0,
+          transform: revealed ? "translateY(0)" : "translateY(40px)",
+          marginTop: revealed ? "2rem" : 0,
+          height: revealed ? "auto" : 0,
+          overflow: revealed ? "visible" : "hidden",
+          pointerEvents: revealed ? "auto" : "none",
+        }}
       >
         <div className="bg-navy-800 rounded-2xl border border-navy-700 p-8 shadow-2xl">
           <h1 className="font-display font-bold text-xl text-white mb-1 uppercase tracking-wide">
