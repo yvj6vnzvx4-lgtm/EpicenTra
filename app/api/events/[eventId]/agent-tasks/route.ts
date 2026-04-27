@@ -6,18 +6,19 @@ import { runPlanningAgent } from "@/lib/agent-service";
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
   });
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const tasks = await prisma.agentTask.findMany({
-    where: { eventId: params.eventId },
+    where: { eventId: eventId },
     include: { createdBy: { select: { id: true, name: true, avatarUrl: true } } },
     orderBy: { createdAt: "desc" },
   });
@@ -27,13 +28,14 @@ export async function GET(
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
   });
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -46,7 +48,7 @@ export async function POST(
     data: {
       prompt,
       status: "IN_PROGRESS",
-      eventId: params.eventId,
+      eventId: eventId,
       createdById: session.user.id,
     },
     include: { createdBy: { select: { id: true, name: true, avatarUrl: true } } },
@@ -56,7 +58,7 @@ export async function POST(
   let result: string;
   let status: "COMPLETED" | "FAILED";
   try {
-    result = await runPlanningAgent(params.eventId, prompt);
+    result = await runPlanningAgent(eventId, prompt);
     status = "COMPLETED";
   } catch {
     result = "The agent encountered an error. Please try again.";

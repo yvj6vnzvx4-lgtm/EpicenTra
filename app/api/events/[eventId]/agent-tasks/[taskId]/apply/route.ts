@@ -20,17 +20,18 @@ interface ApplyItem {
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { eventId: string; taskId: string } }
+  { params }: { params: Promise<{ eventId: string; taskId: string }> }
 ) {
+  const { eventId, taskId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (isEventLocked(event.status)) return lockedEventResponse();
 
   const task = await prisma.agentTask.findFirst({
-    where: { id: params.taskId, eventId: params.eventId },
+    where: { id: taskId, eventId: eventId },
     select: { id: true },
   });
   if (!task) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -43,7 +44,7 @@ export async function POST(
   for (const item of items) {
     if (item.type === "checklist" && item.title) {
       const maxSort = await prisma.checklistItem.aggregate({
-        where: { eventId: params.eventId },
+        where: { eventId: eventId },
         _max: { sortOrder: true },
       });
       await prisma.checklistItem.create({
@@ -52,7 +53,7 @@ export async function POST(
           category: item.category ?? "General",
           source: "agent",
           sortOrder: (maxSort._max.sortOrder ?? 0) + 1,
-          eventId: params.eventId,
+          eventId: eventId,
         },
       });
       results.checklist++;
@@ -62,7 +63,7 @@ export async function POST(
           category: item.category ?? "Other",
           description: item.description,
           estimated: item.estimated ?? 0,
-          eventId: params.eventId,
+          eventId: eventId,
         },
       });
       results.budget++;
@@ -72,7 +73,7 @@ export async function POST(
           vendorName: item.vendorName,
           category: item.category ?? "Other",
           status: "PENDING",
-          eventId: params.eventId,
+          eventId: eventId,
         },
       });
       results.vendor++;
@@ -80,7 +81,7 @@ export async function POST(
   }
 
   await prisma.agentTask.update({
-    where: { id: params.taskId },
+    where: { id: taskId },
     data: { resultMeta: { applied: true, appliedAt: new Date().toISOString(), counts: results } },
   });
 

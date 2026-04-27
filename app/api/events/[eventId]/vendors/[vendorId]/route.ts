@@ -10,24 +10,25 @@ import {
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { eventId: string; vendorId: string } }
+  { params }: { params: Promise<{ eventId: string; vendorId: string }> }
 ) {
+  const { eventId, vendorId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (isEventLocked(event.status)) return lockedEventResponse();
 
   const existing = await prisma.eventVendor.findFirst({
-    where: { id: params.vendorId, eventId: params.eventId },
+    where: { id: vendorId, eventId: eventId },
     select: { id: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await req.json();
   const vendor = await prisma.eventVendor.update({
-    where: { id: params.vendorId },
+    where: { id: vendorId },
     data: body,
   });
   return NextResponse.json(vendor);
@@ -35,21 +36,22 @@ export async function PATCH(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { eventId: string; vendorId: string } }
+  { params }: { params: Promise<{ eventId: string; vendorId: string }> }
 ) {
+  const { eventId, vendorId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (isEventLocked(event.status)) return lockedEventResponse();
 
   const existing = await prisma.eventVendor.findFirst({
-    where: { id: params.vendorId, eventId: params.eventId },
+    where: { id: vendorId, eventId: eventId },
     select: { id: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  await prisma.eventVendor.delete({ where: { id: params.vendorId } });
+  await prisma.eventVendor.delete({ where: { id: vendorId } });
   return new NextResponse(null, { status: 204 });
 }

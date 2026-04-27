@@ -6,18 +6,19 @@ import { extractTasksFromChat, runPlanningAgent } from "@/lib/agent-service";
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
   });
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   // Step 1: extract task prompts from the chat
-  const prompts = await extractTasksFromChat(params.eventId);
+  const prompts = await extractTasksFromChat(eventId);
   if (prompts.length === 0) {
     return NextResponse.json(
       { error: "Not enough conversation to generate tasks. Add some messages to the Notes chat first." },
@@ -34,7 +35,7 @@ export async function POST(
       data: {
         prompt,
         status: "IN_PROGRESS",
-        eventId: params.eventId,
+        eventId: eventId,
         createdById: session.user.id,
       },
     });
@@ -42,7 +43,7 @@ export async function POST(
     let result: string;
     let status: "COMPLETED" | "FAILED";
     try {
-      result = await runPlanningAgent(params.eventId, prompt);
+      result = await runPlanningAgent(eventId, prompt);
       status = "COMPLETED";
     } catch {
       result = "The agent encountered an error on this task.";

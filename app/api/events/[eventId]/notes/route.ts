@@ -6,18 +6,19 @@ import { runPlanningAgent } from "@/lib/agent-service";
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
   });
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const notes = await prisma.note.findMany({
-    where: { eventId: params.eventId },
+    where: { eventId: eventId },
     include: { user: { select: { id: true, name: true, avatarUrl: true } } },
     orderBy: { createdAt: "asc" },
   });
@@ -27,13 +28,14 @@ export async function GET(
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
   });
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -46,7 +48,7 @@ export async function POST(
     data: {
       content,
       type: "USER",
-      eventId: params.eventId,
+      eventId: eventId,
       userId: session.user.id,
     },
     include: { user: { select: { id: true, name: true, avatarUrl: true } } },
@@ -68,13 +70,13 @@ export async function POST(
     .trim() || content;
 
   // Call Groq
-  const agentResponse = await runPlanningAgent(params.eventId, prompt);
+  const agentResponse = await runPlanningAgent(eventId, prompt);
 
   const agentNote = await prisma.note.create({
     data: {
       content: agentResponse,
       type: "AGENT",
-      eventId: params.eventId,
+      eventId: eventId,
       userId: null,
       metadata: { triggeredBy: userNote.id },
     },

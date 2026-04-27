@@ -11,18 +11,19 @@ function getMetadataObject(value: unknown): Record<string, unknown> {
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { eventId: string; noteId: string } }
+  { params }: { params: Promise<{ eventId: string; noteId: string }> }
 ) {
+  const { eventId, noteId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
   });
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const existing = await prisma.note.findFirst({
-    where: { id: params.noteId, eventId: params.eventId },
+    where: { id: noteId, eventId: eventId },
     include: { user: { select: { id: true, name: true, avatarUrl: true } } },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -54,7 +55,7 @@ export async function PATCH(
   }
 
   const note = await prisma.note.update({
-    where: { id: params.noteId },
+    where: { id: noteId },
     data: {
       isPinned: nextPinned,
       type: nextType,
@@ -68,22 +69,23 @@ export async function PATCH(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { eventId: string; noteId: string } }
+  { params }: { params: Promise<{ eventId: string; noteId: string }> }
 ) {
+  const { eventId, noteId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
   });
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const existing = await prisma.note.findFirst({
-    where: { id: params.noteId, eventId: params.eventId },
+    where: { id: noteId, eventId: eventId },
     select: { id: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  await prisma.note.delete({ where: { id: params.noteId } });
+  await prisma.note.delete({ where: { id: noteId } });
   return new NextResponse(null, { status: 204 });
 }

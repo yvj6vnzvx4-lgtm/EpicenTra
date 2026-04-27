@@ -10,24 +10,25 @@ import {
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { eventId: string; slotId: string } }
+  { params }: { params: Promise<{ eventId: string; slotId: string }> }
 ) {
+  const { eventId, slotId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (isEventLocked(event.status)) return lockedEventResponse();
 
   const existing = await prisma.staffSlot.findFirst({
-    where: { id: params.slotId, eventId: params.eventId },
+    where: { id: slotId, eventId: eventId },
     select: { id: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await req.json();
   const slot = await prisma.staffSlot.update({
-    where: { id: params.slotId },
+    where: { id: slotId },
     data: body,
   });
   return NextResponse.json(slot);
@@ -35,21 +36,22 @@ export async function PATCH(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { eventId: string; slotId: string } }
+  { params }: { params: Promise<{ eventId: string; slotId: string }> }
 ) {
+  const { eventId, slotId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (isEventLocked(event.status)) return lockedEventResponse();
 
   const existing = await prisma.staffSlot.findFirst({
-    where: { id: params.slotId, eventId: params.eventId },
+    where: { id: slotId, eventId: eventId },
     select: { id: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  await prisma.staffSlot.delete({ where: { id: params.slotId } });
+  await prisma.staffSlot.delete({ where: { id: slotId } });
   return new NextResponse(null, { status: 204 });
 }

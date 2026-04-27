@@ -10,13 +10,14 @@ import {
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
     include: {
       owner: { select: { id: true, name: true, avatarUrl: true } },
       members: { include: { user: { select: { id: true, name: true, avatarUrl: true } } } },
@@ -33,12 +34,13 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await req.json();
@@ -60,23 +62,24 @@ export async function PATCH(
     if (key in body) data[key] = body[key];
   }
 
-  const updated = await prisma.event.update({ where: { id: params.eventId }, data });
+  const updated = await prisma.event.update({ where: { id: eventId }, data });
   return NextResponse.json(updated);
 }
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   // Soft delete — just stamp deletedAt
   await prisma.event.update({
-    where: { id: params.eventId },
+    where: { id: eventId },
     data: { deletedAt: new Date() },
   });
   return NextResponse.json({ success: true });

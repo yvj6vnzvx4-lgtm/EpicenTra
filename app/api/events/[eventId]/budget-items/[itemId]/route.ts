@@ -10,24 +10,25 @@ import {
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { eventId: string; itemId: string } }
+  { params }: { params: Promise<{ eventId: string; itemId: string }> }
 ) {
+  const { eventId, itemId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (isEventLocked(event.status)) return lockedEventResponse();
 
   const existing = await prisma.budgetItem.findFirst({
-    where: { id: params.itemId, eventId: params.eventId },
+    where: { id: itemId, eventId: eventId },
     select: { id: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await req.json();
   const item = await prisma.budgetItem.update({
-    where: { id: params.itemId },
+    where: { id: itemId },
     data: body,
   });
   return NextResponse.json(item);
@@ -35,21 +36,22 @@ export async function PATCH(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { eventId: string; itemId: string } }
+  { params }: { params: Promise<{ eventId: string; itemId: string }> }
 ) {
+  const { eventId, itemId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (isEventLocked(event.status)) return lockedEventResponse();
 
   const existing = await prisma.budgetItem.findFirst({
-    where: { id: params.itemId, eventId: params.eventId },
+    where: { id: itemId, eventId: eventId },
     select: { id: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  await prisma.budgetItem.delete({ where: { id: params.itemId } });
+  await prisma.budgetItem.delete({ where: { id: itemId } });
   return new NextResponse(null, { status: 204 });
 }

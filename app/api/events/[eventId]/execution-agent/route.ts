@@ -6,20 +6,21 @@ import { startExecutionAgentRun } from "@/lib/agent-service";
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const event = await prisma.event.findFirst({
-    where: { id: params.eventId, organizationId: session.user.organizationId },
+    where: { id: eventId, organizationId: session.user.organizationId },
   });
   if (!event) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const tasks = await startExecutionAgentRun(params.eventId, session.user.id);
+  const tasks = await startExecutionAgentRun(eventId, session.user.id);
   return NextResponse.json(tasks);
 }

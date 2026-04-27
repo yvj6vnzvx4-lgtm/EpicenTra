@@ -10,19 +10,20 @@ import {
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { eventId: string } }
+  { params }: { params: Promise<{ eventId: string }> }
 ) {
+  const { eventId } = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const event = await getAuthorizedEvent(params.eventId, session.user.organizationId);
+  const event = await getAuthorizedEvent(eventId, session.user.organizationId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (isEventLocked(event.status)) return lockedEventResponse();
 
   const body = await req.json();
   const vendor = await prisma.eventVendor.create({
     data: {
-      eventId: params.eventId,
+      eventId: eventId,
       vendorName: body.vendorName ?? "New Vendor",
       category: body.category ?? "misc",
       contactName: body.contactName ?? null,
