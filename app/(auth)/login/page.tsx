@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ChevronDown } from "lucide-react";
@@ -243,6 +244,16 @@ export default function LoginPage() {
               Sign in
             </Button>
           </form>
+
+          {/* Create account link */}
+          <div className="mt-4 text-center">
+            <p className="text-xs text-[#6B7A99]">
+              New here?{" "}
+              <Link href="/register" className="text-brand-cyan hover:text-white transition-colors">
+                Create an account
+              </Link>
+            </p>
+          </div>
 
           {/* Demo credentials */}
           <div className="mt-6 pt-5 border-t border-navy-700">
