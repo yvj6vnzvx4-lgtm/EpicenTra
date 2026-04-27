@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
@@ -34,8 +34,8 @@ function generateDots(count: number): Dot[] {
   }));
 }
 
-const BrandMark = ({ className, style }: { className?: string; style?: React.CSSProperties }) => (
-  <svg viewBox="0 0 520 521" className={className} style={style} fill="none" xmlns="http://www.w3.org/2000/svg">
+const BrandMark = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 520 521" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M0 181C0 114.726 53.7258 61 120 61H400V61C400 127.274 346.274 181 280 181H0V181Z" fill="#1565C0" fillOpacity="0.9"/>
     <path d="M180 521C113.726 521 60 467.274 60 401L60 121C126.274 121 180 174.726 180 241V521Z" fill="#7CE1FB" fillOpacity="0.9"/>
     <path d="M120 461C120 394.726 173.726 341 240 341H520C520 407.274 466.274 461 400 461H120Z" fill="#5BC5F2" fillOpacity="0.9"/>
@@ -103,10 +103,17 @@ export default function LoginPage() {
         className="flex flex-col items-center cursor-default select-none"
         onMouseEnter={handleHover}
       >
-        {/* Logo container — relative so dots can be positioned inside */}
-        <div className="relative flex items-center justify-center" style={{ width: 128, height: 128 }}>
-
-          {/* Dots — only visible after hover, each floats up independently */}
+        {/* Logo mark — shrinks in place, does NOT disappear */}
+        <div
+          style={{
+            position: "relative",
+            overflow: "visible",
+            transition: "width 1300ms ease-out, height 1300ms ease-out",
+            width: revealed ? 52 : 96,
+            height: revealed ? 52 : 96,
+          }}
+        >
+          {/* Dots burst out of the logo and float upward */}
           {revealed && dots.map((dot) => (
             <span
               key={dot.id}
@@ -124,24 +131,16 @@ export default function LoginPage() {
             />
           ))}
 
-          {/* Logo SVG — fades out on reveal */}
-          <BrandMark
-            className="w-full h-full"
-            style={{
-              transition: "opacity 1000ms ease-out, filter 800ms ease-out",
-              opacity: revealed ? 0 : 1,
-              filter: revealed ? "blur(4px)" : "none",
-            }}
-          />
+          <BrandMark className="w-full h-full" />
         </div>
 
-        {/* Wordmark */}
+        {/* Wordmark — transitions slowly */}
         <p
-          className="font-display font-black uppercase tracking-[0.08em] text-white mt-4"
+          className="font-display font-black uppercase tracking-[0.08em] text-white"
           style={{
-            transition: "font-size 1100ms ease-out, opacity 1000ms ease-out",
-            fontSize: revealed ? "1.5rem" : "3rem",
-            opacity: revealed ? 0.7 : 1,
+            transition: "font-size 1600ms ease-out, margin-top 1300ms ease-out",
+            fontSize: revealed ? "1.125rem" : "3rem",
+            marginTop: revealed ? "0.5rem" : "1rem",
           }}
         >
           EpicenTra
@@ -151,27 +150,27 @@ export default function LoginPage() {
         <p
           className="text-brand-coral font-semibold tracking-widest uppercase"
           style={{
-            transition: "font-size 1000ms ease-out, opacity 900ms ease-out, margin-top 1000ms ease-out",
-            fontSize: revealed ? "0.625rem" : "0.75rem",
-            marginTop: revealed ? "0.25rem" : "0.5rem",
+            transition: "font-size 1400ms ease-out, opacity 1200ms ease-out, margin-top 1400ms ease-out",
+            fontSize: revealed ? "0.6rem" : "0.75rem",
+            marginTop: revealed ? "0.15rem" : "0.5rem",
             opacity: revealed ? 0.4 : 1,
           }}
         >
           Plan Smarter. Launch Faster. Events Redefined.
         </p>
 
-        {/* Hover hint — fades out after reveal */}
+        {/* Hover hint — fades and collapses before card appears */}
         <div
           style={{
-            transition: "opacity 600ms ease-out, height 700ms ease-out, margin-top 700ms ease-out",
+            transition: "opacity 700ms ease-out, max-height 800ms ease-out, margin-top 800ms ease-out",
             opacity: revealed ? 0 : 1,
-            height: revealed ? 0 : "auto",
+            maxHeight: revealed ? 0 : "80px",
             marginTop: revealed ? 0 : "1.5rem",
-            pointerEvents: revealed ? "none" : "auto",
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
+            pointerEvents: revealed ? "none" : "auto",
           }}
         >
           <p className="text-[11px] text-[#6B7A99] uppercase tracking-[0.2em]">hover to enter</p>
@@ -179,16 +178,16 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Login card — slides up on reveal */}
+      {/* Login card — reveals below the logo after hover */}
       <div
         className="w-full max-w-sm"
         style={{
-          transition: "opacity 1200ms ease-out 300ms, transform 1200ms ease-out 300ms, margin-top 1200ms ease-out 300ms, height 1000ms ease-out",
+          transition: "opacity 1100ms ease-out 500ms, transform 1200ms ease-out 500ms, max-height 1200ms ease-out 300ms, margin-top 1200ms ease-out 300ms",
           opacity: revealed ? 1 : 0,
-          transform: revealed ? "translateY(0)" : "translateY(40px)",
+          transform: revealed ? "translateY(0)" : "translateY(30px)",
+          maxHeight: revealed ? "700px" : "0px",
           marginTop: revealed ? "2rem" : 0,
-          height: revealed ? "auto" : 0,
-          overflow: revealed ? "visible" : "hidden",
+          overflow: "hidden",
           pointerEvents: revealed ? "auto" : "none",
         }}
       >
